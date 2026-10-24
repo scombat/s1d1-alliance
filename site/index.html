@@ -28,13 +28,13 @@
 
 <section id="api-url" hidden>
 <h2>API</h2>
-<p>Base URL: <code>https://s1d1.qoo.gy/api/v1</code>. Limit: 100 requests per 10 s per IP; on a 429, retry later or fall back to your default model.</p>
+<p>Base URL: <code>https://s1d1.qoo.gy/api</code>. Paths: <code>POST /v1/systemone</code> (and <code>/v1/systemone/batch</code>), <code>/v1/decisions</code>, <code>/v1/chat/completions</code>, <code>/classify</code>, <code>/predict</code>; <code>GET /v1/models</code>. Limit: 100 requests per 10 s per IP; on a 429, retry later or fall back to your default model.</p>
 </section>
 
 <section id="tutorial" hidden>
 <h2>Tutorial</h2>
 <h3>LiteLLM</h3>
-<p>Register s1d1 as the classifier of the Auto Router, using the chat-completions or the decisions format, with the base URL <code>https://s1d1.qoo.gy/api/v1</code>. Map the tiers it returns to your own models. Details: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a> in s1d1-tantive.</p>
+<p>LiteLLM 1.106 or later: register s1d1 as the classifier of the Auto Router in System One format, with <code>"classifier_type": "oss_classifier"</code> and <code>"opensource_classifier_config": {"provider": "laya", "model": "multilingual", "api_base": "https://s1d1.qoo.gy/api", "timeout_ms": 1000}</code>. The <code>api_base</code> is the service root: LiteLLM appends <code>/v1/systemone</code>. Before 1.106, use the chat-completions format with the base URL <code>https://s1d1.qoo.gy/api/v1</code>. Map the tiers it returns to your own models. Details: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a> in s1d1-tantive.</p>
 <h3>curl</h3>
 <pre>curl -s https://s1d1.qoo.gy/api/v1/systemone \
   -H 'content-type: application/json' -d '{

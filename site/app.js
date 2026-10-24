@@ -1,12 +1,14 @@
 // No cookie, no storage: the acceptance gate only lives in the page until it is closed.
 const gate = document.getElementById("accept");
 const gated = ["api-url", "tutorial", "try-box"].map((id) => document.getElementById(id));
-gate.addEventListener("change", () => {
+const toggle = () => {
   for (const el of gated) {
     if (gate.checked) el.removeAttribute("hidden");
     else el.setAttribute("hidden", "");
   }
-});
+};
+gate.addEventListener("change", toggle);
+toggle(); // a browser may restore the box as checked without firing change
 
 const out = document.getElementById("try-out");
 document.getElementById("try-form").addEventListener("submit", async (ev) => {

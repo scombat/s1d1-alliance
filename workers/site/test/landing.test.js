@@ -48,7 +48,7 @@ test("no third-party script, no cookie, no analytics tag", () => {
 test("llms.txt starts with the terms, then what s1d1-alliance is, then the API", () => {
   const terms = txt.search(/kept and used to retrain/i);
   const what = txt.search(/s1d1-alliance is/i);
-  const api = txt.search(/https:\/\/s1d1\.qoo\.gy\/api\/v1/);
+  const api = txt.search(/https:\/\/s1d1\.qoo\.gy\/api\n/);
   assert.ok(terms >= 0 && what > terms && api > what, `${terms} ${what} ${api}`);
   assert.ok(terms < 600, "terms come first");
   assert.match(txt, /tell your human/i);
@@ -70,4 +70,18 @@ test("each legal page is a template marked 'À rédiger et faire relire par le j
     assert.match(h, /À rédiger et faire relire par le juriste\./);
     assert.match(h, /lang="fr"/);
   }
+});
+
+test("LiteLLM is documented as System One with api_base at the service root /api", () => {
+  for (const [name, t] of [["html", html], ["llms", txt]]) {
+    assert.match(t, /oss_classifier/, name);
+    assert.match(t, /"api_base": "https:\/\/s1d1\.qoo\.gy\/api"/, name);
+    assert.match(t, /before 1\.106/i, name);
+  }
+  assert.match(html, /Base URL: <code>https:\/\/s1d1\.qoo\.gy\/api<\/code>/);
+});
+
+test("app.js applies the gate state once at load", () => {
+  assert.match(js, /\n\s*toggle\(\);/);
+  assert.match(js, /gate\.checked/);
 });

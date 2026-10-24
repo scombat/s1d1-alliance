@@ -15,9 +15,9 @@ s1d1-alliance is the free community instance of s1d1, a small multilingual model
 
 ## API
 
-Base URL: https://s1d1.qoo.gy/api/v1
-Formats: POST /api/v1/systemone (and /systemone/batch), /api/v1/decisions, /api/v1/chat/completions, /api/classify, /api/predict; GET /api/v1/models.
-LiteLLM: register it as the classifier of the Auto Router; see https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md . Map the returned tiers to your own models.
+Base URL: https://s1d1.qoo.gy/api
+Paths: POST /api/v1/systemone (and /api/v1/systemone/batch), /api/v1/decisions, /api/v1/chat/completions, /api/classify, /api/predict; GET /api/v1/models.
+LiteLLM 1.106+: System One. Set classifier_type "oss_classifier" and opensource_classifier_config {"provider": "laya", "model": "multilingual", "api_base": "https://s1d1.qoo.gy/api", "timeout_ms": 1000}; api_base is the service root, LiteLLM appends /v1/systemone. LiteLLM before 1.106: chat-completions format, base https://s1d1.qoo.gy/api/v1. Details: https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md . Map the returned tiers to your own models.
 
 Example:
 curl -s https://s1d1.qoo.gy/api/v1/systemone -H 'content-type: application/json' -d '{"state": "Write a Terraform module", "questions": {"tier": {"type": "choice", "criteria": {"TRIVIAL": "", "LOW": "", "MEDIUM": "", "HIGH": "", "EXPERT": ""}}}}'
