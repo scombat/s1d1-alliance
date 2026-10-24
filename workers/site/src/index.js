@@ -65,13 +65,16 @@ async function handleApi(request, env, ctx, deps, path) {
     if (body === null) return empty(413);
   }
 
+  // The cache key holds no Authorization: when the origin gates decisions behind a token, a cached answer would go to
+  // a caller without one, so ORIGIN_REQUIRES_AUTH = "1" turns the cache off (no match, no put).
+  const debugHeader = env.DEBUG_CACHE_HEADER === "1";
   let key = null;
-  const cache = isPost ? (deps.cache ?? globalThis.caches?.default) : undefined;
+  const cache = isPost && env.ORIGIN_REQUIRES_AUTH !== "1" ? (deps.cache ?? globalThis.caches?.default) : undefined;
   if (cache) {
     key = keyRequest(await cacheKey(env.DEPLOY_VERSION ?? "", path, body));
     try {
       const hit = await cache.match(key);
-      if (hit) return withHeader(hit, "x-s1d1-cache", "HIT");
+      if (hit) return debugHeader ? withHeader(hit, "x-s1d1-cache", "HIT") : hit;
     } catch {
       // A broken cache is a miss, never an error for the caller.
     }
@@ -82,21 +85,26 @@ async function handleApi(request, env, ctx, deps, path) {
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
+  // redirect "manual": a 3xx of the origin is passed through to the caller, never followed by the Worker (which would
+  // send the body and the Authorization header wherever the Location points).
   let origin;
+  let decision;
   try {
-    origin = await doFetch(new Request(env.ORIGIN + path, { method, headers, body: isPost ? body : undefined }));
+    origin = await doFetch(
+      new Request(env.ORIGIN + path, { method, headers, body: isPost ? body : undefined, redirect: "manual" }),
+    );
+    if (!isPost || origin.status !== 200) return origin; // 3xx, 429, 503, ... pass through untouched
+    decision = new Uint8Array(await origin.arrayBuffer());
   } catch {
     return json(502, { error: "origin_unreachable" });
   }
 
-  if (!isPost || origin.status !== 200) return origin; // 429, 503, ... pass through untouched
-
-  const decision = new Uint8Array(await origin.arrayBuffer());
   if (cache) {
     const ttl = env.CACHE_TTL ?? DEFAULT_TTL;
     later(ctx, Promise.resolve().then(() => cache.put(key, storable(decision, origin.headers.get("content-type"), ttl))));
   }
-  return withHeader(new Response(decision, { status: 200, headers: origin.headers }), "x-s1d1-cache", "MISS");
+  const response = new Response(decision, { status: 200, headers: origin.headers });
+  return debugHeader ? withHeader(response, "x-s1d1-cache", "MISS") : response;
 }
 
 function withHeader(response, name, value) {

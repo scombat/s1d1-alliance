@@ -135,7 +135,8 @@ jobs:
   #   GCP_WIF_PROVIDER = terraform output ci_workload_identity_provider
   #   GCP_CI_SA        = terraform output ci_publisher_service_account
   #   GCP_PROJECT      = the Google Cloud project id
-  # None of them is a secret.
+  # Optional: GCP_REGION, the region of the registry, the same value as the gcp_region Terraform variable
+  # (europe-west1 when unset, gcp_region's default). None of them is a secret.
   anonymizer-image:
     name: anonymizer-image
     needs: [anonymizer]
@@ -149,7 +150,8 @@ jobs:
       id-token: write
       contents: read
     env:
-      IMAGE: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT }}/s1d1/anonymizer
+      REGISTRY: ${{ vars.GCP_REGION || 'europe-west1' }}-docker.pkg.dev
+      IMAGE: ${{ vars.GCP_REGION || 'europe-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/s1d1/anonymizer
     steps:
       - name: Check out with history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,7 +190,7 @@ jobs:
         if: steps.changed.outputs.build == 'true'
         env:
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-        run: echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin europe-west1-docker.pkg.dev
+        run: echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin "$REGISTRY"
 
       - name: Build and push (linux/amd64)
         if: steps.changed.outputs.build == 'true'

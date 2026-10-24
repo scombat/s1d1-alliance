@@ -1,0 +1,21 @@
+# The prompt as it is stored (or "drop"), a tab, then the prompt as it is sent. Invisible characters are written
+# \uXXXX. The prompt is folded (NFKC) and its invisible separators removed before the coverage rule, the patterns and
+# the models (canonical.py). Invented data only.
+Call me at [PHONE] tomorrow.	Call me at +33 𝟔 𝟏𝟐 𝟑𝟒 𝟓𝟔 𝟕𝟖 tomorrow.
+Call me at [PHONE] tomorrow.	Call me at +33 ６ １２ ３４ ５６ ７８ tomorrow.
+Card [CARD] on file.	Card ⁴¹¹¹ ¹¹¹¹ ¹¹¹¹ ¹¹¹¹ on file.
+Write to [EMAIL] today.	Write to jane\u200b.doe@example.org today.
+Write to [EMAIL] today.	Write to jane.doe@exa\u200bmple.org today.
+Write to [EMAIL] today.	Write to jane.doe\u2060@example.org today.
+Write to [EMAIL] today.	Write to ja\u00adne.doe@example.org today.
+Write to [EMAIL] today.	Write to \ufeffjane.doe@example.org today.
+Write to [EMAIL] today.	Write to jane\u200d.doe@example.org today.
+Write to [EMAIL] today.	Write to jane\u200c.doe@example.org today.
+Write to [EMAIL] today.	Write to ｊａｎｅ＠ｅｘａｍｐｌｅ．ｏｒｇ today.
+Write to [EMAIL] today.	Write to 𝗃𝖺𝗇𝖾@𝖾𝗑𝖺𝗆𝗉𝗅𝖾.𝗈𝗋𝗀 today.
+drop	Write to ᴊᴏʜɴ sᴍɪᴛʜ today.
+drop	My name is ᴊᴏʜɴ.
+drop	The IPA of "bit" is /bɪt/.
+The family 👨\u200d👩\u200d👧 and the flag 🏳\ufe0f\u200d🌈 stay as they are.	The family 👨\u200d👩\u200d👧 and the flag 🏳\ufe0f\u200d🌈 stay as they are.
+می\u200cخواهم این متن را خلاصه کنی.	می\u200cخواهم این متن را خلاصه کنی.
+The office file is ready.	The office ﬁle is ready.

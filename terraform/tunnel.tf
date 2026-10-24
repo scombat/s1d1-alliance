@@ -19,7 +19,8 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "s1d1" {
     ingress = [
       {
         # The closed list of API paths (the Worker enforces the same list; the tunnel is the second wall).
-        # S1D1_ROOT_PATH=/api on tantive: no path is rewritten.
+        # No path is rewritten: tantive receives /api/...; tantive 0.8.0 and later handle a path that starts with
+        # its S1D1_ROOT_PATH (docs/operations.md, smoke test 9.1).
         hostname = local.hostname
         path     = "^/api/(v1/(chat/completions|models|decisions|systemone(/batch)?)|classify|predict|models)$"
         service  = "http://tantive:8788"

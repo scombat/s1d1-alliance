@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import re
+import string
 
 import pytest
 from fakes import FIXTURES, FakeDetector, NoDetector, clean_expected_text, raw_valid_lines
 
-from anonymizer.clean import CLEAN_KEYS, anonymize, clean_line, clean_line_reason, dumps_line
+from anonymizer.canonical import canonical
+from anonymizer.clean import CLEAN_KEYS, MAX_PROMPT_CHARS, anonymize, clean_line, clean_line_reason, dumps_line
 from anonymizer.coverage import is_uncovered, letter_scripts
 
 DECISION_11 = [
@@ -215,3 +218,73 @@ def test_valid_fixture_matches_clean_expected():
     produced = "".join(dumps_line(clean_line(raw, detector)) + "\n" for raw in raw_valid_lines())
     assert produced == clean_expected_text()
     assert [json.loads(x) for x in produced.splitlines()] == [json.loads(x) for x in clean_expected_text().splitlines()]
+
+
+# --- the canonical form: look-alike letters and digits, invisible separators -----------------------------------
+
+
+def _unescape(text):
+    return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), text)
+
+
+def _lookalike_cases():
+    for raw in (FIXTURES / "lookalikes.txt").read_text(encoding="utf-8").splitlines():
+        if raw.strip() and not raw.startswith("#"):
+            expected, prompt = raw.split("\t", 1)
+            yield _unescape(expected), _unescape(prompt)
+
+
+@pytest.mark.parametrize(("expected", "prompt"), list(_lookalike_cases()))
+def test_lookalikes_are_folded_before_anonymising(expected, prompt):
+    out, reason = clean_line_reason(_base(prompt=prompt), NoDetector())
+    if expected == "drop":
+        assert (out, reason) == (None, "dropped_uncovered_script"), prompt
+    else:
+        assert out["prompt"] == expected, prompt
+
+
+class _SeesJohnSmith(NoDetector):
+    """A model that finds "John smith" in plain letters, and only there: what it reads is the canonical form."""
+
+    def spans(self, text):
+        self.calls += 1
+        return [(m.start(), m.end(), "[PERSON]") for m in re.finditer("John smith", text)]
+
+
+def test_the_models_read_the_folded_text():
+    # modifier and superscript letters fold to plain Latin before the model reads them; small capitals are dropped
+    detector = _SeesJohnSmith()
+    assert clean_line(_base(prompt="Ask ᴶᵒʰⁿ ˢᵐⁱᵗʰ for the keys."), detector)["prompt"] == "Ask [PERSON] for the keys."
+    assert clean_line_reason(_base(prompt="Ask ᴊᴏʜɴ sᴍɪᴛʜ for the keys."), detector) == (
+        None,
+        "dropped_uncovered_script",
+    )
+    assert detector.calls == 1
+
+
+def test_a_zero_width_space_inside_a_key_does_not_hide_it():
+    # assembled at run time so that gitleaks sees no key-shaped literal; not a real credential
+    rng = random.Random(7)
+    body = "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(40))
+    for invisible in ("\u200b", "\u2060", "\u00ad", "\ufeff", "\u200d", "\u200c"):
+        key = "sk" + "-" + "proj-" + body[:20] + invisible + body[20:]
+        out = clean_line(_base(prompt=f"my key is {key} ok"), NoDetector())
+        assert out["prompt"] == "my key is [SECRET] ok", repr(invisible)
+
+
+def test_the_canonical_form_keeps_emoji_sequences_and_persian():
+    assert canonical("ok \U0001f9d1\U0001f3fd\u200d\U0001f4bb ok") == "ok \U0001f9d1\U0001f3fd\u200d\U0001f4bb ok"
+    assert canonical("a\u200db") == "ab"  # a joiner between letters splits nothing worth keeping
+    assert (
+        canonical("\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645")
+        == "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+    )
+    assert canonical("\u0645\u06cc\u200c") == "\u0645\u06cc"
+
+
+def test_a_prompt_that_nfkc_makes_too_long_or_empty_is_dropped():
+    # one U+FDFA gives 18 characters: the canonical form must still fit the contract's bound
+    long_prompt = "\ufdfa" * (MAX_PROMPT_CHARS // 18 + 1)
+    assert len(long_prompt) <= MAX_PROMPT_CHARS < len(canonical(long_prompt))
+    assert clean_line_reason(_base(prompt=long_prompt), NoDetector()) == (None, "dropped")
+    assert clean_line_reason(_base(prompt="\u200b\ufeff"), NoDetector()) == (None, "dropped")

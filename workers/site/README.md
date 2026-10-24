@@ -22,12 +22,16 @@ No build step and no npm dependency: ES modules, tested on Node 22.
 
 The list is exact: no prefix match, no normalisation beyond what `URL` does. It lives in `src/api.js`.
 
-The `/api` prefix is **kept** when forwarding: tantive runs with `S1D1_ROOT_PATH=/api`, and Starlette strips it before
-routing, so the tunnel rewrites nothing. The query string is dropped (no listed endpoint takes one).
+The `/api` prefix is **kept** when forwarding, and the tunnel rewrites nothing: tantive receives `/api/v1/...`.
+`S1D1_ROOT_PATH=/api` alone does not make that path work; tantive 0.8.0 and later handle a request path that starts
+with the prefix (fixed in s1d1-tantive PR #5), and smoke test 9.1 of `docs/operations.md` checks
+`POST /api/v1/systemone` end to end. The query string is dropped (no listed endpoint takes one).
 
 Only `Content-Type`, `Accept` and `Authorization` are forwarded. `cf-connecting-ip`, `x-forwarded-for`, `cookie` and
-the user agent never reach the origin. An unreachable origin is a 502; any other origin error (429, 503, ...) is
-passed through untouched, status, body and `Retry-After` included.
+the user agent never reach the origin. The origin is fetched with `redirect: "manual"`: a 3xx is passed through to the
+caller as it is, never followed by the Worker (which would carry the body and `Authorization` to the `Location`), and
+never cached. An unreachable origin, or an origin body that fails while it is read, is a 502; any other origin answer
+(429, 503, ...) is passed through untouched, status, body and `Retry-After` included.
 
 ## Bindings and variables
 
@@ -37,7 +41,9 @@ passed through untouched, status, body and `Retry-After` included.
 | `VISITS` | binding | Analytics Engine dataset `s1d1_visits`. Optional: if it is missing, or throws, the page is still served |
 | `DEPLOY_VERSION` | variable | part of the cache key; changing it empties the cache (a new model, a new label set) |
 | `ORIGIN` | variable | `https://s1d1.qoo.gy`: the origin the tunnel reaches (Worker subrequests to the zone go to the origin, not back to the Worker) |
-| `CACHE_TTL` | variable | seconds, `86400` by default |
+| `CACHE_TTL` | variable | seconds, `86400` by default (Terraform refuses 0 or less) |
+| `DEBUG_CACHE_HEADER` | variable | `"1"` adds `x-s1d1-cache: HIT` or `MISS`; anything else (Terraform's default `"0"`) leaves it out |
+| `ORIGIN_REQUIRES_AUTH` | variable | `"1"` turns the cache off entirely (no match, no put); Terraform's default is `"0"` |
 | `MAINTENANCE` | variable | `"1"` to answer 503 on `/api/*` |
 | `STATUS_COMMIT`, `STATUS_TANTIVE_IMAGE`, `STATUS_MODEL` | variables | what `/status.json` reports |
 
@@ -60,8 +66,10 @@ caller another caller's decision. Missing a hit costs one inference; a wrong hit
   `Authorization`) are not stored.
 - The Cache API only keeps `GET` keys, so the key is a bare `GET` request built from that URL.
 - The key does not include `Authorization`: if the origin ever gates decisions behind a token, a cached answer would be
-  served to a caller without one. The public instance has no such gate.
-- `x-s1d1-cache: HIT` or `MISS` tells which path answered. A cache that throws counts as a miss.
+  served to a caller without one. The public instance has no such gate; an origin that has one must run with
+  `ORIGIN_REQUIRES_AUTH = "1"`, which bypasses the cache entirely (it is neither read nor filled).
+- With `DEBUG_CACHE_HEADER = "1"`, `x-s1d1-cache: HIT` or `MISS` tells which path answered; by default the header is
+  absent. A cache that throws counts as a miss.
 - Maintenance is checked before the cache: during maintenance nothing is served from it.
 
 ## Privacy

@@ -24,8 +24,10 @@ function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {} }
   const originCalls = [];
   const assetCalls = [];
   const points = [];
+  const matches = [];
   const cache = {
     match: async (req) => {
+      matches.push(req.url);
       const hit = store.get(req.url);
       return hit ? hit.clone() : undefined;
     },
@@ -39,6 +41,7 @@ function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {} }
     originCalls.push({
       url: req.url,
       method: req.method,
+      redirect: req.redirect,
       headers: Object.fromEntries(req.headers),
       body: new Uint8Array(await req.clone().arrayBuffer()),
     });
@@ -55,7 +58,7 @@ function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {} }
   const waits = [];
   const ctx = { waitUntil: (p) => waits.push(p) };
   const settle = () => Promise.all(waits);
-  return { cache, fetch, env, ctx, settle, store, puts, originCalls, assetCalls, points };
+  return { cache, fetch, env, ctx, settle, store, puts, matches, originCalls, assetCalls, points };
 }
 
 const api = (path, body = "{}", { method = "POST", headers = {} } = {}) =>
@@ -396,4 +399,79 @@ test("the default export delegates to handle with the global fetch and caches.de
     globalThis.fetch = realFetch;
     delete globalThis.caches;
   }
+});
+
+test("x-s1d1-cache is absent by default and shows MISS then HIT with DEBUG_CACHE_HEADER = 1", async () => {
+  const f = fakes();
+  const miss = await run(f, api("/api/v1/systemone", '{"p":"a"}'));
+  await f.settle();
+  const hit = await run(f, api("/api/v1/systemone", '{"p":"a"}'));
+  assert.equal(f.originCalls.length, 1, "the second answer came from the cache");
+  assert.equal(miss.headers.get("x-s1d1-cache"), null);
+  assert.equal(hit.headers.get("x-s1d1-cache"), null);
+  assert.equal(await hit.text(), DECISION);
+
+  const g = fakes();
+  const debug = { DEBUG_CACHE_HEADER: "1" };
+  assert.equal((await run(g, api("/api/v1/systemone", '{"p":"a"}'), debug)).headers.get("x-s1d1-cache"), "MISS");
+  await g.settle();
+  assert.equal((await run(g, api("/api/v1/systemone", '{"p":"a"}'), debug)).headers.get("x-s1d1-cache"), "HIT");
+  for (const value of ["0", "true", undefined]) {
+    const h = fakes();
+    const res = await run(h, api("/api/v1/systemone", '{"p":"a"}'), { DEBUG_CACHE_HEADER: value });
+    assert.equal(res.headers.get("x-s1d1-cache"), null, String(value));
+  }
+});
+
+test("the origin is fetched with redirect manual: a 3xx is passed through, never followed nor cached", async () => {
+  for (const status of [301, 302, 307, 308]) {
+    const f = fakes({ originStatus: status, originBody: "", originHeaders: { location: "https://elsewhere.example/x" } });
+    const res = await run(f, api("/api/v1/decisions", '{"p":1}', { headers: { authorization: "Bearer t" } }));
+    await f.settle();
+    assert.equal(f.originCalls.length, 1);
+    assert.equal(f.originCalls[0].redirect, "manual");
+    assert.equal(res.status, status);
+    assert.equal(res.headers.get("location"), "https://elsewhere.example/x");
+    assert.equal(f.puts.length, 0, `${status} must not be stored`);
+  }
+  const g = fakes();
+  await run(g, api("/api/v1/models", "", { method: "GET" }));
+  assert.equal(g.originCalls[0].redirect, "manual");
+});
+
+test("an origin body that fails while it is read is a 502, and nothing is cached", async () => {
+  const f = fakes();
+  f.fetch = async () => {
+    const body = new ReadableStream({
+      pull(c) {
+        c.error(new TypeError("connection reset"));
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const res = await run(f, api("/api/classify", "{}"));
+  await f.settle();
+  assert.equal(res.status, 502);
+  assert.deepEqual(await res.json(), { error: "origin_unreachable" });
+  assert.equal(f.puts.length, 0);
+});
+
+test("ORIGIN_REQUIRES_AUTH = 1 bypasses the cache: no match, no put, every request reaches the origin", async () => {
+  const f = fakes();
+  const gated = { ORIGIN_REQUIRES_AUTH: "1", DEBUG_CACHE_HEADER: "1" };
+  for (const token of ["Bearer a", "Bearer b"]) {
+    const res = await run(f, api("/api/v1/decisions", '{"p":1}', { headers: { authorization: token } }), gated);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("x-s1d1-cache"), "MISS");
+  }
+  await f.settle();
+  assert.equal(f.originCalls.length, 2);
+  assert.equal(f.matches.length, 0);
+  assert.equal(f.puts.length, 0);
+
+  // "0" (the Terraform default) keeps the cache on
+  const g = fakes();
+  await run(g, api("/api/v1/decisions", '{"p":1}'), { ORIGIN_REQUIRES_AUTH: "0" });
+  await g.settle();
+  assert.equal(g.puts.length, 1);
 });

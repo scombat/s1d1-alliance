@@ -15,3 +15,5 @@ keep	Explain how the Chinese word 你好 is used in greetings.
 keep	Why does the Korean word 안녕하세요 sound so polite to learners?
 keep	The set ℝ of reals, the constant ℏ, 5 µm, the 1ª edición and the nº 3, with the IPA ˈhɛloʊ.
 keep	Γεια σου, שלום, مرحبا and Ça va? are all greetings.
+drop	Please write to ᴊᴏʜɴ sᴍɪᴛʜ about the invoice.
+keep	Please write to ᴶᵒʰⁿ about the invoice.

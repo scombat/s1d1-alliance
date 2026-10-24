@@ -76,22 +76,20 @@ resource "cloudflare_r2_bucket" "clean" {
   jurisdiction = "eu"
 }
 
-data "cloudflare_api_token_permission_groups_list" "r2_item_read" {
-  name = urlencode("Workers R2 Storage Bucket Item Read")
-}
-
+# The anonymizer only writes (PutObject of clean/...); it never reads, lists or deletes. So the token gets the write
+# group alone, not "Item Read". R2 has no write-only object permission: "Item Write" is the dashboard's "Object Read &
+# Write" and also allows reading and listing the objects of this bucket. The bucket scope below is the real limit.
 data "cloudflare_api_token_permission_groups_list" "r2_item_write" {
   name = urlencode("Workers R2 Storage Bucket Item Write")
 }
 
 resource "cloudflare_api_token" "r2_clean" {
-  name = "s1d1-clean object read/write (anonymizer)"
+  name = "s1d1-clean object write (anonymizer)"
 
   policies = [
     {
       effect = "allow"
       permission_groups = [
-        { id = data.cloudflare_api_token_permission_groups_list.r2_item_read.result[0].id },
         { id = data.cloudflare_api_token_permission_groups_list.r2_item_write.result[0].id },
       ]
       # Bucket-scoped resource key: <account>_<jurisdiction>_<bucket>.

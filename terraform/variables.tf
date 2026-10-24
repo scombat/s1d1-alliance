@@ -53,6 +53,33 @@ variable "cache_ttl" {
   type        = number
   default     = 86400
   description = "Lifetime in seconds of a cached decision (CACHE_TTL)."
+
+  validation {
+    condition     = var.cache_ttl > 0 && floor(var.cache_ttl) == var.cache_ttl
+    error_message = "cache_ttl must be a whole number of seconds greater than 0."
+  }
+}
+
+variable "debug_cache_header" {
+  type        = string
+  default     = "0"
+  description = "\"1\" adds x-s1d1-cache: HIT or MISS to the cached API answers (DEBUG_CACHE_HEADER), for the smoke tests; off by default."
+
+  validation {
+    condition     = contains(["0", "1"], var.debug_cache_header)
+    error_message = "debug_cache_header must be \"0\" or \"1\"."
+  }
+}
+
+variable "origin_requires_auth" {
+  type        = string
+  default     = "0"
+  description = "\"1\" when the origin gates decisions behind a token (ORIGIN_REQUIRES_AUTH): the cache key holds no Authorization, so the site Worker then neither reads nor fills the cache."
+
+  validation {
+    condition     = contains(["0", "1"], var.origin_requires_auth)
+    error_message = "origin_requires_auth must be \"0\" or \"1\"."
+  }
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -98,11 +125,13 @@ variable "budget_currency" {
 
 variable "anonymizer_image" {
   type        = string
-  description = "Image of the anonymizer, by digest: <region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>. Cloud Run takes images from Artifact Registry (the CI pushes it there)."
+  default     = null
+  nullable    = true
+  description = "Image of the anonymizer, by digest: <region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>, built by CI from this repo and pushed to Artifact Registry. Null (the default, for the first apply) creates neither the Cloud Run service nor the Eventarc trigger nor their IAM bindings."
 
   validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]{1,128})?@sha256:[0-9a-f]{64}$", var.anonymizer_image))
-    error_message = "anonymizer_image must be given by digest (name@sha256:<64 hex>), so that a deployment is exactly the image that was scanned and signed."
+    condition     = var.anonymizer_image == null || can(regex("^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]{1,128})?@sha256:[0-9a-f]{64}$", var.anonymizer_image))
+    error_message = "anonymizer_image must be null or given by digest (name@sha256:<64 hex>), so that a deployment is exactly the image built by CI from this repo."
   }
 }
 

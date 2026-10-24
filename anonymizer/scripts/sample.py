@@ -33,7 +33,7 @@ def pattern_examples() -> list[str]:
         if line.startswith("#") or "\t" not in line:
             continue
         expected, text = line.split("\t", 1)
-        if "drive.google.com" in text:  # an identifier that looks real: use another [SECRET] case
+        if "drive.google.com" in text:  # a URL of a real service, even with a made-up id: use another [SECRET] case
             continue
         if expected in PATTERN_MARKERS and expected not in found:
             found[expected] = text

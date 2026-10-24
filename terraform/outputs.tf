@@ -45,6 +45,6 @@ output "artifact_registry_repository" {
 }
 
 output "anonymizer_url" {
-  description = "Default URL of the anonymizer. Internal ingress only: it answers nothing from the internet."
-  value       = google_cloud_run_v2_service.anonymizer.uri
+  description = "Default URL of the anonymizer (null until anonymizer_image is set). Internal ingress only: it answers nothing from the internet."
+  value       = one(google_cloud_run_v2_service.anonymizer[*].uri)
 }

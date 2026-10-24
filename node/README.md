@@ -57,3 +57,11 @@ The tokens are never read, printed or logged by the script.
 Copy `compose.yaml`, `update.sh`, `s1d1-update.service` and `s1d1-update.timer` to `/opt/s1d1`, copy `example.env` to
 `/opt/s1d1/.env` (mode 0600) with the two secrets, install cosign, then `systemctl enable --now s1d1-update.timer`.
 The tunnel's ingress is `http://tantive:8788`: the service name on the Compose network.
+
+## The `/api` prefix
+
+Nothing rewrites the path between the public name and the node: a request for `https://s1d1.qoo.gy/api/v1/systemone`
+reaches tantive as `/api/v1/systemone`. `S1D1_ROOT_PATH=/api` in `compose.yaml` does not by itself make such a path
+work; tantive 0.8.0 and later handle a request path that starts with the prefix (fixed in s1d1-tantive PR #5), so a
+node needs a 0.8.0 or later image. Smoke test 9.1 of [docs/operations.md](../docs/operations.md) checks
+`POST /api/v1/systemone` end to end.

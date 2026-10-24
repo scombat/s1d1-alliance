@@ -2,7 +2,9 @@
 
 Every key of a clean line is constrained: the prompt is anonymised, the metadata must be one of the values tantive
 emits (anything else becomes null), and a line whose source or terms version is not one of the known forms is
-dropped. A prompt with a single letter in a script the anonymiser does not cover is dropped too (`coverage.py`).
+dropped. The prompt is first put in its canonical form (`canonical.py`: NFKC, no invisible character that splits a
+word), and that form is the one checked, anonymised and stored. A prompt with a single letter in a script the
+anonymiser does not cover is dropped too (`coverage.py`), small capitals included.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import json
 import math
 import re
 
+from anonymizer.canonical import canonical
 from anonymizer.coverage import is_uncovered
 from anonymizer.detector import Detector
 from anonymizer.patterns import find_patterns, merge_spans
@@ -68,6 +71,10 @@ _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 _REVISION = re.compile(r"[0-9a-f]{7,40}")
 _TERMS = re.compile(r"v[0-9]{1,3}")
 _SOURCE = re.compile(r"capture:community|capture:direct|capture:selfhosted:" + _UUID.pattern)
+
+# The contract's bound on a prompt (contract/ingest-v1.md), checked again on the canonical form: NFKC can lengthen a
+# text (one ﷺ gives 18 characters), and the models' time grows with the length.
+MAX_PROMPT_CHARS = 65_536
 
 # Why a line was dropped: the counter of the object's log line.
 DROPPED = "dropped"
@@ -132,6 +139,9 @@ def clean_line_reason(raw: object, detector: Detector) -> tuple[dict | None, str
     line_id = _clean_id(raw.get("id"))
     if source is None or terms is None or line_id is None:
         return None, DROPPED
+    prompt = canonical(prompt)
+    if not prompt or len(prompt) > MAX_PROMPT_CHARS:
+        return None, DROPPED
     if is_uncovered(prompt):
         return None, UNCOVERED_SCRIPT
     values = {
@@ -152,13 +162,15 @@ def clean_line_reason(raw: object, detector: Detector) -> tuple[dict | None, str
 def clean_line(raw: object, detector: Detector) -> dict | None:
     """The decision-11 line of a raw line, or None when it is dropped.
 
-    Every key is present, in the order of CLEAN_KEYS. `time` is the capture day; without a usable `time` (a real
+    Every key is present, in the order of CLEAN_KEYS. `prompt` is the anonymised canonical form of the prompt (NFKC,
+    without the invisible characters that split a word). `time` is the capture day; without a usable `time` (a real
     calendar date), the day the Worker received the line (`received`); null when neither is there. `id` is kept when
     it is a UUID (lower-cased), otherwise replaced by the first 32 hex of its SHA-256. `format`, `pred_tier` and
     `pred_task` must be values tantive emits, `model_revision` a hex revision, the `pred_*` numbers probabilities in
     [0, 1]: otherwise null. The line is dropped without a prompt, without a string id, without a known source
     (`capture:community`, `capture:direct`, `capture:selfhosted:<lower-case uuid>`) or terms version (`v` and 1 to 3
-    digits), or when its prompt has a single letter in a script the anonymiser does not cover.
+    digits), when its canonical prompt is empty or longer than MAX_PROMPT_CHARS, or when it has a single letter in a
+    script the anonymiser does not cover (small capitals included).
     """
     return clean_line_reason(raw, detector)[0]
 

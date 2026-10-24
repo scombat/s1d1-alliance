@@ -20,17 +20,19 @@ The contract it reads is `contract/ingest-v1.md`; `contract/fixtures/valid.ndjso
    - Without `RAW_BUCKET` set, a raw object is not read and the answer is 500 (a configuration error, retried until
      it is fixed). Another path is a 404, another method a 405.
 2. Reads the object (`google-cloud-storage`, with the identity of the service), splits it into lines, and cleans each
-   line (`src/anonymizer/clean.py`). A line is dropped, and counted, when it is not JSON, has no prompt or no string
-   `id`, has a `source` other than `capture:community`, `capture:direct` or `capture:selfhosted:<lower-case uuid>`,
-   has a `terms_version` other than `v` and 1 to 3 digits, or has a single letter in a script the anonymiser does not
-   cover (see below; counted as `dropped_uncovered_script`). Otherwise the clean line has exactly these keys, in this
+   line (`src/anonymizer/clean.py`). The prompt is first put in its canonical form (see "The canonical form" below):
+   that form is the one checked, anonymised and stored. A line is dropped, and counted, when it is not JSON, has no
+   prompt or no string `id`, has a `source` other than `capture:community`, `capture:direct` or
+   `capture:selfhosted:<lower-case uuid>`, has a `terms_version` other than `v` and 1 to 3 digits, has a canonical
+   prompt that is empty or longer than 65 536 characters, or has a single letter in a script the anonymiser does not
+   cover, small capitals included (see below; counted as `dropped_uncovered_script`). Otherwise the clean line has exactly these keys, in this
    order:
 
    | key | value |
    |---|---|
    | `id` | the id when it is a UUID (lower-cased), otherwise the first 32 hex of its SHA-256 |
    | `time` | the capture day `YYYY-MM-DD` (a real calendar date); without one in `time`, the day the Worker received the line; else null |
-   | `prompt` | anonymised |
+   | `prompt` | the canonical form, anonymised |
    | `source` | as checked above (it keeps the instance UUID of a self-hosted node, decision 13) |
    | `model_revision` | 7 to 40 lower-case hex, else null |
    | `terms_version` | as checked above |
@@ -48,6 +50,25 @@ The contract it reads is `contract/ingest-v1.md`; `contract/fixtures/valid.ndjso
 
 It never logs a prompt, a line or an error message: the log lines (JSON on stderr, for Cloud Logging) carry the object
 name, the counts (`kept`, `dropped`, `dropped_uncovered_script`, `failed`), and the class name of an error.
+
+## The canonical form
+
+Look-alike characters would carry a value past the patterns and the models: `+33 𝟔 𝟏𝟐 𝟑𝟒 𝟓𝟔 𝟕𝟖` is a phone number
+in mathematical digits, `ᴶᵒʰⁿ ˢᵐⁱᵗʰ` a name in modifier letters, and a zero-width space inside an email or an `sk-`
+key cuts it in two. So `src/anonymizer/canonical.py` folds the prompt before anything reads it, and the clean line
+stores the folded text (it is not the text that was sent, byte for byte):
+
+1. NFKC: mathematical, full-width, super- and subscript, modifier and circled letters and digits become the plain
+   ones, ligatures their letters (`𝟔` is `6`, `ᴶᵒʰⁿ` is `John`, `ﬁ` is `fi`, `²` is `2`, `µ` is the Greek `μ`).
+2. The invisible characters that split a word are removed: the soft hyphen (U+00AD), the zero-width space (U+200B),
+   the word joiner (U+2060), the byte order mark (U+FEFF); the zero-width joiner (U+200D) except between two emoji
+   (👨‍👩‍👧, 🏳️‍🌈 are kept); the zero-width non-joiner (U+200C) except between two letters of the Arabic script, where
+   Persian writes with it (`می‌خواهم` is kept).
+
+NFKC leaves small capitals as they are (`ᴊᴏʜɴ sᴍɪᴛʜ`, also the IPA `ɪ ʀ ʏ`), and two modifier capitals (`ᴯ ᴻ`): a
+prompt that still holds one after NFKC is dropped as an uncovered script (no fixture shows the models read them). A
+canonical prompt longer than the contract's 65 536 characters is dropped (NFKC can lengthen a text: `ﷺ` gives 18
+characters). `tests/fixtures/lookalikes.txt` holds these cases.
 
 ## Markers
 
@@ -93,9 +114,11 @@ A script is **covered** when, in the slow tests, the ensemble masks every name a
 number). A prompt is **dropped**, not stored (`src/anonymizer/coverage.py`), as soon as it holds a single letter in a
 script that is not covered: the models miss names in those scripts, and a name can be two letters long (`Ли Хо`), so no
 count or share of such letters would be safe. `Translate привет into English`, `Олег lives at 12 Baker Street.` and a
-long English paragraph ending in `My colleague Иван will call.` are all dropped. Letters that belong to no script and
-hold no name are not counted: ordinal indicators (`nº`, `1ª`), modifier letters (IPA `ˈ ː`), the micro sign,
-letterlike symbols (`ℝ ℏ ℓ`), super- and subscript letters. `tests/fixtures/mixed_scripts.txt` holds these cases.
+long English paragraph ending in `My colleague Иван will call.` are all dropped. The rule reads the canonical form,
+in which NFKC has already turned ordinal indicators (`nº`, `1ª`), letterlike symbols (`ℝ`), the micro sign and most
+super- and subscript and modifier letters into plain ones; the letters left that belong to no script and hold no name
+are not counted (modifier letters such as the IPA `ˈ ː`). Small capitals are counted as a script of their
+own, not covered (`Please write to ᴊᴏʜɴ sᴍɪᴛʜ` is dropped). `tests/fixtures/mixed_scripts.txt` holds these cases.
 
 | script | fixtures | result at the pinned commits | |
 |---|---|---|---|
@@ -133,8 +156,8 @@ A script becomes covered when a fixture shows it: add the fixture, see the slow 
 | `[ID]` | UUIDs, `0x` + 40 hex (account addresses), French NIR (with its key), US SSN (dashed) | |
 | `[SECRET]` | known prefixes (`sk-`, `ghp_` and the other GitHub prefixes, `github_pat_`, `AKIA`/`ASIA`, `xox[abprs]-`, `hf_`, `AIza`, `glpat-`, `npm_`, Stripe keys, JWTs), PEM blocks (`-----BEGIN` through its `-----END` line, or to the end of the text when there is none), `Bearer`/`Basic` credentials, values given to a secret, token or key (`api_key = "…"`, `DB_PASSWORD=…`), any value given to a password (`password is sunshine`, `mot de passe : soleil`, `пароль: …`, letters only included), runs of 32+ hex digits mixing letters and digits, and random tokens | see below |
 
-Arabic-Indic, Persian, Devanagari and full-width digits, no-break spaces and Unicode dashes are read as their ASCII
-forms (one character for one, so offsets do not move).
+The patterns read the canonical form (above); on it, Arabic-Indic, Persian and Devanagari digits, no-break spaces and
+Unicode dashes are also read as their ASCII forms (one character for one, so offsets do not move).
 
 ### Random tokens: the trade-off
 

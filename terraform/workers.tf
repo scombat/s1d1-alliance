@@ -50,6 +50,8 @@ resource "cloudflare_workers_script" "site" {
     # Same-zone subrequest from a route Worker goes to the origin (the tunnel), not back to the Worker.
     { name = "ORIGIN", type = "plain_text", text = "https://${local.hostname}" },
     { name = "CACHE_TTL", type = "plain_text", text = tostring(var.cache_ttl) },
+    { name = "DEBUG_CACHE_HEADER", type = "plain_text", text = var.debug_cache_header },
+    { name = "ORIGIN_REQUIRES_AUTH", type = "plain_text", text = var.origin_requires_auth },
     { name = "MAINTENANCE", type = "plain_text", text = var.maintenance },
     { name = "STATUS_COMMIT", type = "plain_text", text = var.status_commit },
     { name = "STATUS_TANTIVE_IMAGE", type = "plain_text", text = var.tantive_image },

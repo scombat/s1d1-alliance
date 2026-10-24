@@ -62,7 +62,7 @@ Checked in this order, the first that holds gives the source:
 | 405 | | the method is not `POST` |
 | 413 | | the body is over 1 MiB or has more than 500 lines |
 | 415 | | `Content-Type` is not `application/x-ndjson` |
-| 503 | | the write to the raw bucket failed. tantive retries a 503 later; the same batch may come again, so the storage key is unique per batch and deduplication is done on `id` downstream. |
+| 503 | | the write to the raw bucket failed. tantive retries a 503 later; the same batch may come again, so the storage key is unique per batch. Nothing in this repository deduplicates (neither the Worker nor the anonymizer): a batch sent twice gives two raw objects and two clean objects holding the same `id`s, and consumers of the clean corpus must deduplicate by `id` (the s1d1 research pipeline removes duplicates at import). |
 | 503 | `{"error": "maintenance"}` with `Retry-After: 3600` | maintenance is on (`MAINTENANCE = "1"`) |
 
 tantive treats 202 as sent. It treats 400 and 413 as rejected and never sends that batch again. It retries any other
@@ -77,7 +77,7 @@ Each accepted batch is written once, as one object, to the raw bucket:
 
 The object holds the kept lines with `source` and `received`, in the order received. The raw bucket keeps objects for
 3 days. The anonymiser writes the clean copy to `clean/AAAA/MM/JJ/<same uuid>.ndjson`; a rewrite replaces the object,
-so one event received twice produces one clean record.
+so one event received twice produces one clean record (a batch sent twice is two events, see the 503 row above).
 
 ## What is never stored
 

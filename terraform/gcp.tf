@@ -2,8 +2,14 @@
 # that calls it, and the registry its image lives in. Budget: budget.tf. CI identity: wif.tf.
 #
 #   ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anonymizer --S3--> R2 s1d1-clean
+#
+# The first apply runs with anonymizer_image = null: the registry, the federation, the buckets and the Workers exist,
+# the anonymizer does not (no image to run yet). The Cloud Run service, its invoker binding, the Eventarc trigger and
+# the anonymizer's IAM bindings are created by the apply that sets the image (docs/operations.md, section 3).
 
 locals {
+  anonymizer_enabled = var.anonymizer_image != null
+
   raw_bucket_name = google_storage_bucket.raw.name
   gcs_hmac_id     = google_storage_hmac_key.ingest_writer.access_id
   gcs_hmac_secret = google_storage_hmac_key.ingest_writer.secret
@@ -117,6 +123,8 @@ resource "google_storage_bucket_iam_member" "ingest_writer_creates" {
 
 # The anonymizer reads objects of this bucket, nothing else.
 resource "google_storage_bucket_iam_member" "anonymizer_reads" {
+  count = local.anonymizer_enabled ? 1 : 0
+
   bucket = google_storage_bucket.raw.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.anonymizer.email}"
@@ -170,12 +178,16 @@ resource "google_secret_manager_secret_version" "r2_secret_access_key" {
 }
 
 resource "google_secret_manager_secret_iam_member" "anonymizer_r2_access_key_id" {
+  count = local.anonymizer_enabled ? 1 : 0
+
   secret_id = google_secret_manager_secret.r2_access_key_id.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.anonymizer.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "anonymizer_r2_secret_access_key" {
+  count = local.anonymizer_enabled ? 1 : 0
+
   secret_id = google_secret_manager_secret.r2_secret_access_key.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.anonymizer.email}"
@@ -183,29 +195,15 @@ resource "google_secret_manager_secret_iam_member" "anonymizer_r2_secret_access_
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Artifact Registry: where the CI pushes the anonymizer image (wif.tf) and where Cloud Run pulls it.
-# The newest 5 versions are kept; older ones go after 30 days (the image is about 2 GB with torch and two models).
+# No cleanup policy: a DELETE rule by age would delete the deployed image when no new one was pushed for that long,
+# and Cloud Run could then not start a new instance. A KEEP rule alone deletes nothing, so none is set. Old images are
+# deleted by hand, never the digest in images.auto.tfvars (terraform/README.md, "Artifact Registry").
 # ---------------------------------------------------------------------------------------------------------------------
 resource "google_artifact_registry_repository" "s1d1" {
   location      = var.gcp_region
   repository_id = "s1d1"
   format        = "DOCKER"
   description   = "s1d1-alliance images (anonymizer)"
-
-  cleanup_policies {
-    id     = "keep-recent"
-    action = "KEEP"
-    most_recent_versions {
-      keep_count = 5
-    }
-  }
-
-  cleanup_policies {
-    id     = "delete-old"
-    action = "DELETE"
-    condition {
-      older_than = "2592000s" # 30 days
-    }
-  }
 
   depends_on = [google_project_service.api]
 }
@@ -224,6 +222,8 @@ resource "google_artifact_registry_repository" "s1d1" {
 #    a batch holds up to 500 lines.
 # ---------------------------------------------------------------------------------------------------------------------
 resource "google_cloud_run_v2_service" "anonymizer" {
+  count = local.anonymizer_enabled ? 1 : 0
+
   name                = "s1d1-anonymizer"
   location            = var.gcp_region
   ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
@@ -302,9 +302,11 @@ resource "google_cloud_run_v2_service" "anonymizer" {
 
 # The only principal that may invoke the service.
 resource "google_cloud_run_v2_service_iam_member" "eventarc_invokes" {
-  project  = google_cloud_run_v2_service.anonymizer.project
-  location = google_cloud_run_v2_service.anonymizer.location
-  name     = google_cloud_run_v2_service.anonymizer.name
+  count = local.anonymizer_enabled ? 1 : 0
+
+  project  = google_cloud_run_v2_service.anonymizer[0].project
+  location = google_cloud_run_v2_service.anonymizer[0].location
+  name     = google_cloud_run_v2_service.anonymizer[0].name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.eventarc_invoker.email}"
 }
@@ -314,6 +316,8 @@ resource "google_cloud_run_v2_service_iam_member" "eventarc_invokes" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 # The GCS service agent publishes the bucket events to the Pub/Sub topic that Eventarc creates for the trigger.
+# Created by the first apply already (it does not depend on the image), so that it has propagated when the trigger is
+# created; a trigger created right after it may still be refused until it does (a second apply then succeeds).
 resource "google_project_iam_member" "gcs_agent_publishes" {
   project = var.gcp_project
   role    = "roles/pubsub.publisher"
@@ -322,12 +326,16 @@ resource "google_project_iam_member" "gcs_agent_publishes" {
 
 # The identity of the trigger must be allowed to receive events.
 resource "google_project_iam_member" "eventarc_invoker_receives" {
+  count = local.anonymizer_enabled ? 1 : 0
+
   project = var.gcp_project
   role    = "roles/eventarc.eventReceiver"
   member  = "serviceAccount:${google_service_account.eventarc_invoker.email}"
 }
 
 resource "google_eventarc_trigger" "raw_finalized" {
+  count = local.anonymizer_enabled ? 1 : 0
+
   name     = "s1d1-raw-finalized"
   location = google_storage_bucket.raw.location # a Cloud Storage trigger lives in the bucket's region
 
@@ -342,8 +350,8 @@ resource "google_eventarc_trigger" "raw_finalized" {
 
   destination {
     cloud_run_service {
-      service = google_cloud_run_v2_service.anonymizer.name
-      region  = google_cloud_run_v2_service.anonymizer.location
+      service = google_cloud_run_v2_service.anonymizer[0].name
+      region  = google_cloud_run_v2_service.anonymizer[0].location
       path    = "/"
     }
   }

@@ -50,13 +50,15 @@ terraform validate
 | `tantive_image` | no | `unknown` | `STATUS_TANTIVE_IMAGE` of `/status.json` |
 | `status_model` | no | `unknown` | `STATUS_MODEL` of `/status.json` |
 | `maintenance` | no | `0` | `"1"`: `/api/*` and `/ingest` answer 503, the landing stays up |
-| `cache_ttl` | no | `86400` | `CACHE_TTL` in seconds |
+| `cache_ttl` | no | `86400` | `CACHE_TTL` in seconds, a whole number greater than 0 |
+| `debug_cache_header` | no | `0` | `DEBUG_CACHE_HEADER`: `"1"` adds `x-s1d1-cache: HIT`/`MISS` to cached API answers (smoke tests only) |
+| `origin_requires_auth` | no | `0` | `ORIGIN_REQUIRES_AUTH`: `"1"` when the origin gates decisions behind a token; the site Worker then bypasses the cache |
 | `gcp_project` | no | none | Google Cloud project id; also names the raw bucket `<project>-s1d1-raw` (bucket names are global) |
 | `gcp_region` | no | `europe-west1` | bucket, Cloud Run, Artifact Registry, secrets, Eventarc trigger |
 | `billing_account` | no | none | billing account id (`000000-000000-000000`) for the budget |
 | `budget_amount` | no | `5` | monthly budget, whole units |
 | `budget_currency` | no | `EUR` | must be the currency of the billing account |
-| `anonymizer_image` | no | none | `<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>`; a tag without a digest is refused |
+| `anonymizer_image` | no | null | `<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>`, built by CI from this repo; a tag without a digest is refused. Null: no Cloud Run service, no Eventarc trigger, no anonymizer IAM bindings (first apply) |
 | `github_repository` | no | `scombat/s1d1-alliance` | the repository whose `main` branch may push images |
 | `github_repository_owner_id` | no | empty | optional numeric id of the GitHub owner, added to the federation condition |
 | `oci_tenancy_ocid` | no | none | Oracle Cloud tenancy |
@@ -84,7 +86,7 @@ from the R2 API token of `cloudflare.tf`.
 
 Four outputs of the Google part are not sensitive: `ci_workload_identity_provider` and `ci_publisher_service_account`
 (the two inputs of `google-github-actions/auth`), `artifact_registry_repository` (where to push) and
-`anonymizer_url`. No GCP secret is an output; the HMAC secret only goes to the ingest Worker binding.
+`anonymizer_url` (null until `anonymizer_image` is set). No GCP secret is an output; the HMAC secret only goes to the ingest Worker binding.
 
 `node_public_ip` (not sensitive) is the Oracle node's address; nothing listens on it.
 
@@ -94,13 +96,18 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
 
 - Tunnel `s1d1` (remotely managed) and its ingress: `s1d1.qoo.gy`, path
   `^/api/(v1/(chat/completions|models|decisions|systemone(/batch)?)|classify|predict|models)$` to
-  `http://tantive:8788`, then `http_status:404`. No path is rewritten (tantive runs with `S1D1_ROOT_PATH=/api`).
+  `http://tantive:8788`, then `http_status:404`. No path is rewritten: tantive receives `/api/...`. `S1D1_ROOT_PATH=/api`
+  alone does not make that work; tantive 0.8.0 and later handle a request path that starts with the prefix (fixed in
+  s1d1-tantive PR #5), and smoke test 9.1 of `docs/operations.md` checks `POST /api/v1/systemone` end to end.
 - `CNAME s1d1` to `<tunnel id>.cfargotunnel.com`, proxied.
 - Workers `s1d1-site` (static files of `../site`, Analytics Engine binding `VISITS` on dataset `s1d1_visits`) and
   `s1d1-ingest`; routes `s1d1.qoo.gy/*` to the first and `s1d1.qoo.gy/ingest` to the second.
 - Ruleset `http_ratelimit`: 100 requests per 10 s per IP on `starts_with(http.request.uri.path, "/api/")`, action
   `block`, blocked for 10 s.
-- R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it (object read and write).
+- R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it, with the one permission group
+  `Workers R2 Storage Bucket Item Write`: the anonymizer only writes (`PutObject`), so `Item Read` is not granted. R2
+  has no write-only object permission: `Item Write` is the dashboard's "Object Read & Write" and also allows reading
+  and listing that bucket's objects (https://developers.cloudflare.com/r2/api/tokens/). The bucket scope is the limit.
 - `random_password.community_token` (48 characters, no special character).
 - `cloudflare_workers_script_subdomain` with `enabled = false` for both Workers, so that they are served by the
   routes only (a workers.dev copy of the site Worker would not go through the zone's rate limit). If the apply
@@ -142,7 +149,15 @@ ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anon
   - `ci-publisher`: `roles/artifactregistry.writer` on the `s1d1` repository only (see below).
 - **Secrets** `r2-access-key-id`, `r2-secret-access-key` in Secret Manager, replicated in `europe-west1` only. The
   service reads the pinned version, so a rotation (new R2 token) makes a new revision.
-- **Artifact Registry** `s1d1` (Docker). Cleanup keeps the newest 5 versions and deletes the others after 30 days.
+- **Artifact Registry** `s1d1` (Docker), with **no cleanup policy**: a DELETE rule by age would delete the deployed
+  image when no new one was pushed for that long (Cloud Run could then not start a new instance), and a KEEP rule
+  alone deletes nothing. Delete old images by hand (`gcloud artifacts docker images list` / `delete`) when the storage
+  cost matters, never the digest in `terraform/images.auto.tfvars`.
+- **Created only when `anonymizer_image` is set** (the second apply of `docs/operations.md`, section 3): the Cloud Run
+  service, its `run.invoker` binding, the anonymizer's bucket and secret bindings, `roles/eventarc.eventReceiver` of
+  `eventarc-invoker` and the Eventarc trigger. The GCS service agent's `roles/pubsub.publisher` is created by the first
+  apply, so that it has propagated when the trigger is created; a trigger refused on the service agent's permission
+  the first time succeeds on the next run.
 - **Cloud Run** `s1d1-anonymizer`: internal ingress, 0 to 2 instances, 1 vCPU, **4 GiB**, concurrency 1, timeout 3600 s,
   CPU only during requests, startup CPU boost. Environment: `RAW_BUCKET`, `R2_ENDPOINT`, `R2_BUCKET=s1d1-clean`,
   `GLINER_MODEL_DIRS` (the image default, spelled out), `GLINER_THRESHOLD=0.5`; `R2_ACCESS_KEY_ID` and
@@ -189,9 +204,13 @@ so the second run replaces it and nothing is duplicated, only compute is spent.
 
 Create the provider token in the dashboard with the permissions that the provider documents for each resource:
 
-- Account: Workers Scripts Write, Workers R2 Storage Write, Cloudflare Tunnel Write (Connectors), and API Tokens
-  Write (the R2 token is created by Terraform; a token cannot grant more than its creator holds, and it needs to
-  read the permission group list).
+- Account: Workers Scripts Write, Workers R2 Storage Write, Cloudflare Tunnel Write (Connectors).
+- User: **API Tokens Write** (the dashboard shows it as User, API Tokens, Edit). `cloudflare_api_token` creates a
+  user-owned token (`/user/tokens`) and `cloudflare_api_token_permission_groups_list` reads
+  `/user/tokens/permission_groups`; the provider documents "API Tokens Write" (or Read, for the list) for both. Cloudflare
+  offers this permission only through the "Create additional tokens" template, not in the custom token builder: start
+  the provider token from that template and add the other permissions to it. A token cannot grant more than its
+  creator holds, so the provider token also needs the R2 write permission above.
 - Zone `qoo.gy`: Workers Routes Write, DNS Write, and the zone ruleset (Zone WAF / rate limiting) write permission.
 
 ## Oracle node (`oci.tf`)
@@ -239,9 +258,11 @@ on `main`.
    Identity Pool Admin, `iam.serviceAccountUser` on the three runtime accounts, and Billing Account Costs Manager
    (or Billing Account Administrator) **on the billing account** for the budget. This account is the most powerful
    credential of the project: keep it out of the repository and rotate it.
-4. **First image.** `anonymizer_image` is required, and the image must exist in Artifact Registry before the Cloud Run
-   service is created. Create the repository first (`terraform apply -target=google_artifact_registry_repository.s1d1`),
-   push the image by digest, then apply the rest with `anonymizer_image` set.
+4. **First image.** The image must exist in Artifact Registry before the Cloud Run service is created, so the first
+   apply runs with `anonymizer_image` null (its default) and creates no anonymizer; the CI then pushes the image
+   (`workflow_dispatch`), a pull request adds `terraform/images.auto.tfvars` with its digest, and the next apply
+   creates the anonymizer. No `-target` is needed (the workspace is VCS-driven). Details: `docs/operations.md`,
+   section 3.
 5. **Currency.** `budget_currency` must equal the billing account's currency; the API rejects the budget otherwise.
 6. **Account.** R2 must be enabled on the account before the first apply.
 

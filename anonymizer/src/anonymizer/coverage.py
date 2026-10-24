@@ -19,6 +19,10 @@ COVERED_SCRIPTS = frozenset({"LATIN", "GREEK", "HEBREW", "ARABIC", "HAN", "HANGU
 # Letters that belong to no script of their own, and hold no name: ordinal indicators (nº, 1ª), modifier letters
 # (IPA ˈ ː), the micro sign, letterlike symbols (ℝ ℏ ℓ ℹ), super- and subscript letters. They count as COMMON, covered.
 COMMON = "COMMON"
+# Small capitals (ᴊᴏʜɴ, IPA ɪ ʀ), and the modifier capitals that NFKC leaves as they are (ᴯ ᴻ): a name can be spelt in
+# them, NFKC does not fold them to plain letters (`canonical.py`) and no fixture shows the models read them, so they are
+# not covered.
+SMALL_CAPITAL = "SMALL_CAPITAL"
 _KANA_SHARE = 0.05  # kana / (kana + Han) from which the Han characters are read as Japanese
 
 
@@ -35,6 +39,8 @@ def script_of(ch: str) -> str:
         return "KATAKANA"  # also the prolonged sound mark, KATAKANA-HIRAGANA PROLONGED SOUND MARK
     if name.startswith(("HALFWIDTH HANGUL", "HANGUL")):
         return "HANGUL"
+    if "SMALL CAPITAL" in name or name.startswith("MODIFIER LETTER CAPITAL"):
+        return SMALL_CAPITAL
     if name.startswith(("MODIFIER LETTER", "FEMININE ORDINAL", "MASCULINE ORDINAL", "MICRO SIGN")) or (
         0x2100 <= ord(ch) <= 0x214F  # letterlike symbols
     ):
@@ -64,5 +70,8 @@ def letter_scripts(text: str) -> dict[str, int]:
 
 
 def is_uncovered(text: str) -> bool:
-    """True as soon as one letter is in a script the anonymiser does not cover (Han read as Japanese included)."""
+    """True as soon as one letter is in a script the anonymiser does not cover (Han read as Japanese included).
+
+    It reads the canonical form of the prompt (`canonical.py`), in which NFKC has folded the look-alike letters.
+    """
     return any(script not in COVERED_SCRIPTS and script != COMMON for script in letter_scripts(text))

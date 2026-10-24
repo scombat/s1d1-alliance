@@ -37,36 +37,49 @@ Done once, outside Terraform:
 | `gcp_project` | no | also names the raw bucket `<project>-s1d1-raw` |
 | `billing_account` | no | |
 | `budget_currency` | no | must equal the billing account currency (default `EUR`) |
-| `anonymizer_image` | no | not set by hand: it comes from `images.auto.tfvars` (section 3) |
+| `anonymizer_image` | no | not set by hand: it comes from `terraform/images.auto.tfvars` (section 3); absent (null) on the first apply |
 | `oci_tenancy_ocid`, `oci_user_ocid`, `oci_fingerprint`, `oci_compartment_ocid` | no | |
 | `oci_private_key` | **yes** | PEM content of the API key, not a path |
 | `GOOGLE_CREDENTIALS` | **yes** | environment variable, if not using dynamic credentials |
 
 Optional, with defaults: `deploy_version`, `status_commit`, `tantive_image`, `status_model`, `maintenance`, `cache_ttl`,
-`gcp_region`, `budget_amount`, `github_repository`, `github_repository_owner_id` (set it: the numeric owner id),
+`debug_cache_header`, `origin_requires_auth`, `gcp_region`, `budget_amount`, `github_repository`, `github_repository_owner_id` (set it: the numeric owner id),
 `oci_region`, `oci_availability_domain_index`.
 
 ## 3. First apply, in this order
 
-The Cloud Run service needs an image that already exists, and the image needs the registry and the federation. So:
+The Cloud Run service needs an image that already exists, and the image needs the registry and the federation. The
+workspace is VCS-driven, so there is no `-target`: `anonymizer_image` is null by default, and with it null Terraform
+creates everything except the anonymizer (no Cloud Run service, no Eventarc trigger, none of the anonymizer's IAM
+bindings). So the first apply is a plain run, and a second one, with the image set, adds the anonymizer.
 
-1. **Registry and federation first** (a targeted run, from a CLI-driven run started at the repository root, or a plan
-   with `-target` in the workspace):
-   `terraform -chdir=terraform apply -target=google_artifact_registry_repository.s1d1 -target=google_service_account.ci_publisher -target=google_iam_workload_identity_pool_provider.github -target=google_artifact_registry_repository_iam_member.ci_publisher_writes -target=google_service_account_iam_member.ci_publisher_from_github`
+1. **First apply, without the anonymizer**: start a run of the workspace (or merge to `main`) with no
+   `terraform/images.auto.tfvars`. It creates the APIs, Artifact Registry, the federation and `ci-publisher`, the raw
+   bucket, the secrets, the budget, the R2 bucket and its token, the Workers, the tunnel and the Oracle node. Until the
+   second apply, `/ingest` writes raw objects that nobody cleans; the raw bucket deletes them at 3 days.
 2. **Repository variables** (GitHub, Settings, Secrets and variables, Actions, Variables; none is a secret):
    `GCP_WIF_PROVIDER` = `terraform output -raw ci_workload_identity_provider`,
-   `GCP_CI_SA` = `terraform output -raw ci_publisher_service_account`, `GCP_PROJECT` = the project id.
-3. **Push the image**: Actions, `ci`, "Run workflow" on `main` (the `anonymizer-image` job otherwise runs only on a push to
-   `main` that changes `anonymizer/`). It builds `linux/amd64`, pushes
-   `europe-west1-docker.pkg.dev/<project>/s1d1/anonymizer:<commit sha>` and prints, in the job summary, the line to
-   paste. It never commits.
+   `GCP_CI_SA` = `terraform output -raw ci_publisher_service_account`, `GCP_PROJECT` = the project id, and
+   `GCP_REGION` only if `gcp_region` is not the default `europe-west1` (the CI pushes to
+   `<GCP_REGION>-docker.pkg.dev`, `europe-west1` when it is unset).
+3. **Push the image**: Actions, `ci`, "Run workflow" on `main` (`workflow_dispatch`; the `anonymizer-image` job otherwise
+   runs only on a push to `main` that changes `anonymizer/`). It builds `linux/amd64`, pushes
+   `<region>-docker.pkg.dev/<project>/s1d1/anonymizer:<commit sha>` and prints, in the job summary, the line to paste. It
+   never commits.
 4. **Set the digest**: in a pull request, create `terraform/images.auto.tfvars` with that line:
-   `anonymizer_image = "europe-west1-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>"`.
+   `anonymizer_image = "<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>"`.
    (`*.auto.tfvars` is the one tfvars form git keeps.) A tag without a digest is refused by the variable.
-5. **Full apply** of the workspace. Every later image goes the same way: merge to `main`, read the summary, open a PR
-   with the new digest, apply.
+5. **Second apply**: merging the pull request starts it. It adds the Cloud Run service, its invoker binding, the
+   anonymizer's bucket and secret bindings, the Eventarc receiver role and the trigger. The Cloud Storage service
+   agent's publisher role is created by the first apply so that it has propagated by then; if the trigger is still
+   refused with a permission error on the service agent (it can take a few minutes the first time), start the run
+   again: the second try succeeds once the role has propagated. Every later image goes the same way: merge to `main`,
+   read the summary, open a PR with the new digest, apply.
 6. The tunnel exists with no connector: start the nodes (section 5). Fill `status_commit`, `tantive_image` and
    `status_model` for `/status.json` when the node digests are known.
+
+Artifact Registry has no cleanup policy: an age rule would one day delete the image Cloud Run runs. Delete old images
+by hand when the storage cost matters, never the digest in `terraform/images.auto.tfvars`.
 
 ## 4. Cloudflare, by hand (Terraform cannot)
 
@@ -106,8 +119,9 @@ cosign and the timer, and follows `node/desired.env` on `main` by itself. A node
    (the URL is the one in `s1d1-update.service`:
    `https://raw.githubusercontent.com/scombat/s1d1-alliance/main/node/desired.env`).
 5. Check: `docker compose -f /opt/s1d1/compose.yaml --env-file /opt/s1d1/.env ps`, and `journalctl -u s1d1-update`.
-   `desired.env` carries placeholder digests until tantive 0.8.0 is published; a placeholder fails the cosign check,
-   so the node starts nothing, which is the intended behaviour.
+   `desired.env` carries a placeholder digest until tantive 0.8.0 is published; a placeholder is not `sha256:<64 hex>`,
+   so `update.sh` refuses the file at its format check (exit 1) before any cosign verification, and the node starts
+   nothing, which is the intended behaviour.
 
 ## 6. Emergency stop: `MAINTENANCE`
 
@@ -142,15 +156,21 @@ docker compose -f /opt/s1d1/compose.yaml --env-file /opt/s1d1/.env exec tantive 
   python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8788/metrics').read().decode())"
 ```
 
-(`S1D1_ROOT_PATH=/api` is stripped before routing, so inside the container the path is `/metrics`.) Or go through a
+(The command calls `/metrics` inside the container, without the public `/api` prefix; check it once on the first node,
+since only the prefixed API paths are proven by the smoke test of section 9.1.) Or go through a
 Cloudflare Access application in front of a separate private hostname of the tunnel. Never open a public path for them.
 
 ## 9. Smoke tests after the first deploy
 
 These were verified against documentation only; the first deploy is where they are proven.
 
-1. **Same-zone fetch**: from the `s1d1-site` Worker, `fetch("https://s1d1.qoo.gy/api/v1/models")` must reach the tunnel
-   (the origin), not loop back into the Worker. `x-s1d1-cache` shows `MISS` then `HIT` on a repeated `POST`.
+1. **Same-zone fetch and the `/api` prefix, end to end**: `POST https://s1d1.qoo.gy/api/v1/systemone` with a
+   System One body must answer 200 with a decision. That proves the `s1d1-site` Worker's subrequest reaches the tunnel
+   (the origin) instead of looping back into the Worker, and that tantive answers a path that starts with `/api`.
+   `S1D1_ROOT_PATH=/api` alone does not make that work: the request reaches tantive with the prefix still in its path,
+   and tantive 0.8.0 and later handle a request path that starts with the prefix (fixed in s1d1-tantive PR #5). To see
+   the cache, set `debug_cache_header` to `1` and apply: `x-s1d1-cache` then shows `MISS`, then `HIT` on the same
+   `POST` repeated; set it back to `0` afterwards (the header is absent by default).
 2. **Worker module edits show in plan**: change a non-index module (for example `workers/site/src/api.js`) and
    check that `terraform plan` shows a diff on the script.
 3. **R2 EU endpoint write**: the anonymizer writes `clean/...` to `r2_endpoint` (the `eu` jurisdiction endpoint); a
