@@ -104,6 +104,9 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
   `s1d1-ingest`; routes `s1d1.qoo.gy/*` to the first and `s1d1.qoo.gy/ingest` to the second.
 - Ruleset `http_ratelimit`: 100 requests per 10 s per IP on `starts_with(http.request.uri.path, "/api/")`, action
   `block`, blocked for 10 s.
+- Two `ratelimit` bindings on `s1d1-ingest` (`INGEST_BURST` 100 per 10 s, namespace 1001; `INGEST_SUSTAINED` 100 per
+  60 s, namespace 1002), per client IP, community node exempt: see `workers/ingest/README.md`. They replace the zone
+  rule for `/ingest`, which covers `/api/` only.
 - R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it, with the one permission group
   `Workers R2 Storage Bucket Item Write`: the anonymizer only writes (`PutObject`), so `Item Read` is not granted. R2
   has no write-only object permission: `Item Write` is the dashboard's "Object Read & Write" and also allows reading

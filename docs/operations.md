@@ -183,6 +183,12 @@ These were verified against documentation only; the first deploy is where they a
    the count is not doubled by the Worker's own subrequest to the zone.
 7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
    `container/memory/utilizations`) and compare with the 4 GiB limit; adjust only on that reading.
+8. **Ingest rate limits (to verify at the first apply)**: the Cloudflare page on the Workers Rate Limiting binding does
+   not say whether it is available on the Workers Free plan; check that the apply accepts the two `ratelimit`
+   bindings of `s1d1-ingest` (namespace ids 1001 and 1002). Then, with `contract/fixtures/valid.ndjson` and no
+   token, send 101 `POST /ingest` in 10 s from one IP: the 101st gets 429 `rate_limited` with `Retry-After: 10`, and
+   the same burst with the community token stays 202. The limits are approximate and per location, so expect a
+   few requests of margin.
 
 ## 10. Known corpus cost: script coverage and the drop rule
 
@@ -198,8 +204,8 @@ From docs/26 section 5, after the checks of tasks 9 and 10 (the full text is in 
 
 - **Question 4, route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
   apply.
-- **Live behaviours not provable offline**: the seven smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
-  Eventarc, R2 EU write, GCS PUT, rate limit with the subrequest, peak memory).
+- **Live behaviours not provable offline**: the eight smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
+  Eventarc, R2 EU write, GCS PUT, rate limit with the subrequest, peak memory, ingest rate limits).
 - **Eventarc retries**: the policy cannot be tuned in this provider version (`max_attempts = 1` only, no dead letter);
   a permanently failing object can be redelivered for 24 h. Watch Cloud Run's error rate.
 - **Legal texts**: the three French pages are templates until the lawyer has written and reviewed them; the licence of this

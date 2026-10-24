@@ -89,14 +89,20 @@ function bearer(authorization) {
   return m ? m[1] : null;
 }
 
-/** capture:community, capture:selfhosted:<instance_id> or capture:direct, in that order. */
-export function sourceOf(line, authorization, communityToken) {
+/** True when the request carries the community token (constant-time comparison; false when none is configured). */
+export function isCommunity(authorization, communityToken) {
   const token = bearer(authorization);
   // Always run the comparison when a token is configured, so a missing header costs the same as a wrong one.
   if (typeof communityToken === "string" && communityToken.length > 0) {
     const match = constantTimeEqual(token ?? "", communityToken);
-    if (match && token !== null && token.length > 0) return "capture:community";
+    return match && token !== null && token.length > 0;
   }
+  return false;
+}
+
+/** capture:community, capture:selfhosted:<instance_id> or capture:direct, in that order. */
+export function sourceOf(line, authorization, communityToken) {
+  if (isCommunity(authorization, communityToken)) return "capture:community";
   const id = line?.instance_id;
   if (typeof id === "string" && UUID.test(id)) return `capture:selfhosted:${id.toLowerCase()}`;
   return "capture:direct";

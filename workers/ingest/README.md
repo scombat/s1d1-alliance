@@ -7,16 +7,56 @@ Storage bucket. The contract is `contract/ingest-v1.md`; the examples the tests 
 ## What it does
 
 1. Answers 503 `{"error": "maintenance"}` with `Retry-After: 3600` when `MAINTENANCE` is `"1"`.
-2. Refuses what is not a `POST` to `/ingest` (405, 404), what is not `application/x-ndjson` (415), what is over
-   1 MiB (413, checked on `Content-Length` and again on the bytes actually read) or over 500 lines (413).
-3. Parses and validates line by line (`src/validate.js`). A bad line is dropped and counted; the batch is never
+2. Refuses what is not a `POST` to `/ingest` (405, 404).
+3. Applies the per-IP limits (see "Rate limits" below), unless the request carries the community token.
+4. Refuses what is not `application/x-ndjson` (415), what is over 1 MiB (413, checked on `Content-Length` and again
+   on the bytes actually read) or over 500 lines (413).
+5. Parses and validates line by line (`src/validate.js`). A bad line is dropped and counted; the batch is never
    refused for it. Unknown keys are removed; `null` counts as an absent optional key (tantive sends `null`).
-4. Adds `source` (`capture:community`, `capture:selfhosted:<uuid>` or `capture:direct`) and `received` (UTC day).
+6. Adds `source` (`capture:community`, `capture:selfhosted:<uuid>` or `capture:direct`) and `received` (UTC day).
    The community token is compared in constant time.
-5. Writes the kept lines as one object `raw/YYYY/MM/DD/<uuid>.ndjson` (`src/gcs.js`). A failed write is a 503, which
+7. Writes the kept lines as one object `raw/YYYY/MM/DD/<uuid>.ndjson` (`src/gcs.js`). A failed write is a 503, which
    tantive retries. Nothing is written when no line is valid: 202 `{"accepted": 0, "dropped": n}`.
 
-It never logs a body, a line or a header; the only log line is a fixed message with the HTTP status of a failed write.
+It never logs a body, a line, a header or an IP; the only log lines are a fixed message with the HTTP status of a failed
+write and, when a rate limit binding is missing or fails, a fixed message naming the binding.
+
+## Rate limits
+
+Two [Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) bindings
+count requests per client IP:
+
+| binding | limit | period | `Retry-After` when refused |
+|---|---|---|---|
+| `INGEST_BURST` | 100 | 10 s | 10 |
+| `INGEST_SUSTAINED` | 100 | 60 s | 60 |
+
+That is at most 10 requests per second and at most 6 000 per hour for one key. Both must allow the request (the
+burst is asked first; a request it refuses does not use the sustained budget). Over a limit the answer is 429
+`{"error": "rate_limited"}` and nothing is written. The body is not read.
+
+- **Key = the client IP**, `cf-connecting-ip`, or `"unknown"` when the header is absent. Cloudflare advises against
+  IP keys because several users can share one address. Here it is still the right key: an `instance_id` is
+  chosen by the sender and can be forged, so the IP is the only key a sender cannot invent. A shared address (a
+  company NAT) shares the budget; 10 req/s is a generous allowance for a node that sends batches.
+- **The community node is exempt.** A request with the community token (same constant-time check as `source`) never
+  reaches the limits. Maintenance, method and path checks come before; content type, size and parsing after.
+- **tantive treats 429 as a temporary failure**: its cursor stays where it was and it backs off, so a refused batch
+  is sent again later and nothing is lost.
+- **The limits are approximate and per Cloudflare location**, as Cloudflare documents: the counters are local to the
+  data centre that serves the request and eventually consistent, so a client spread over several locations can
+  exceed the figures. They stop a loop, not a determined distributed attacker. `/api` keeps the single zone WAF
+  rule (`terraform/cloudflare.tf`); this replaces it for `/ingest` only.
+- **A missing binding fails open** for that limit (local runs, tests without it), with one fixed log line that
+  names the binding and nothing of the request. A binding that throws is treated the same. So that this cannot ship
+  unnoticed, `test/terraform.test.js` reads `terraform/workers.tf` and fails if either binding is not declared on
+  the ingest Worker with the right limit and period.
+- **Terraform**: `type = "ratelimit"`, `namespace_id` and `simple = { limit, period }` on the Worker's `bindings`
+  (provider 5.28.1). The namespace ids are integers we choose, unique in the Cloudflare account: **1001** for
+  `INGEST_BURST` and **1002** for `INGEST_SUSTAINED`. Cloudflare accepts a period of 10 or 60 seconds only.
+- **To verify at the first apply**: the Cloudflare page does not say whether the binding is available on the
+  Workers Free plan. If the upload is refused, this is the first thing to look at (smoke test 8 of
+  `docs/operations.md`).
 
 ## Environment
 
@@ -27,6 +67,8 @@ It never logs a body, a line or a header; the only log line is a fixed message w
 | `GCS_HMAC_SECRET` | secret | its HMAC secret |
 | `COMMUNITY_TOKEN` | secret | the bearer token of the community node |
 | `MAINTENANCE` | variable | `"1"` to answer 503 on `/ingest` |
+| `INGEST_BURST` | rate limit | 100 per 10 s per IP, namespace 1001 |
+| `INGEST_SUSTAINED` | rate limit | 100 per 60 s per IP, namespace 1002 |
 
 No secret is in this repository; they are given to the Worker at deploy time.
 
