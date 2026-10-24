@@ -1,0 +1,42 @@
+# Expected markers (in text order), a tab, then the text. Invented data only: example domains, test card
+# numbers, documentation IP ranges, the IBAN examples of the registry and fictitious phone numbers.
+[EMAIL]	Write to jane.doe+news@example.org before Friday.
+[EMAIL]	Écrivez à marie.dupont@exemple.fr avant vendredi.
+[EMAIL]	请发邮件到zhang.wei@example.cn联系我。
+[EMAIL]	Click mailto:support@example.com to reach us.
+[PHONE]	Call me at +33 6 12 34 56 78 tomorrow.
+[PHONE]	Mon numéro : 06 12 34 56 78.
+[PHONE]	Mon numéro est le 06.12.34.56.78 le soir.
+[PHONE]	Call (415) 555-0132 after 5 pm.
+[PHONE]	Call 415-555-0132 after 5 pm.
+[PHONE]	Ruf mich an: 030 12345678
+[PHONE]	Erreichbar unter +49 (0)30 1234 5678.
+[PHONE]	Ring 020 7946 0958 for the office.
+[PHONE]	Tel. 0049 30 1234567
+[PHONE]	我的手机是13800138000，谢谢。
+[PHONE]	Позвоните мне: 8 (912) 345-67-89.
+[PHONE]	Позвоните: +7 912 345-67-89
+[PHONE]	رقمي ٠٥٠١٢٣٤٥٦٧ شكرا
+[PHONE]	Mon numéro : 06 12 34 56 78 2 fois par jour.
+[IBAN]	IBAN : FR76 3000 6000 0112 3456 7890 189
+[IBAN]	Pay to DE89370400440532013000 please.
+[IBAN]	GB29 NWBK 6016 1331 9268 19 is the account.
+[IBAN]	Virement sur fr76 3000 6000 0112 3456 7890 189.
+[CARD]	My card is 4111 1111 1111 1111, exp 12/27.
+[CARD]	Card: 5555-5555-5555-4444
+[CARD]	Amex 378282246310005 works.
+[CARD]	Pay 4111 1111 1111 1111 5 times.
+[IP]	The server is at 203.0.113.42 now.
+[IP]	Connect to 2001:db8::8a2e:370:7334 over SSH.
+[IP]	Host fe80::1ff:fe23:4567:890a%eth0 is up.
+[IP]	Open http://[2001:db8::1]:8080/ in a browser.
+[URL_CREDENTIALS]	Use postgres://admin:s3cretPass@db.example.com:5432/app
+[URL_CREDENTIALS]	Fetch https://bob:hunter2@example.com/private now.
+[ID]	The order 3f2b8c1a-9d4e-4f6a-b2c7-8e1d0a5f6b3c failed.
+[ID]	Mon numéro de sécu est 1 85 05 78 006 084 91.
+[ID]	SSN 123-45-6789 on file.
+[EMAIL] [PHONE]	Jane: jane@example.com, +44 20 7946 0958.
+[IP] [EMAIL] [CARD]	From 198.51.100.7, ana@example.net paid with 5555 5555 5555 4444.
+[EMAIL]	Write to uzeda.ssa@example.comEduardo for the form.
+[SECRET]	Open https://drive.google.com/file/d/1XcIF4Y8LEI8o0SMvFpdGcycil8eMy15j/view to see it.
+[SECRET]	Authorization: Basic dXNlcjpodW50ZXIy

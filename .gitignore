@@ -8,6 +8,8 @@
 # Dependencies and virtual environments
 node_modules/
 .venv/
+__pycache__/
+.pytest_cache/
 
 # Environment files: only the two node templates are versioned
 .env

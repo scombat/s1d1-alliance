@@ -1,0 +1,46 @@
+# Text without personal data or secrets: each line must come out unchanged. One line per case.
+4111 1111 1111 1112 is not a valid card.
+FR76 3000 6000 0112 3456 7890 188 is a bad IBAN.
+The meeting is on 24/10/2026 at 14:30.
+Le rendez-vous est le 01.02.2026 10:00 à Paris.
+Version 3.12.1 of Python fixed it; use numpy 2.1.0.
+Listen on 127.0.0.1:8080 or 0.0.0.0 and use the mask 255.255.255.0.
+Use std::vector<int> and a::b in C++, and wait until 12:30:45.
+Commit 3f786850e387550fdab836ed7e6dc881de23001b broke the build.
+sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+Read /home/user/projects/my-long-repository-name/src/components2/Header.tsx first.
+Rename getUserAccountSettingsFromDatabaseV2Test to something shorter.
+Call user_account_settings_controller_v2_test before the deploy.
+The image logo@2x.png is blurry.
+Clone git@github.com:owner/repo.git first.
+The base64 of a short text: VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==
+Between 1990 and 2020, 1 234 567 people moved.
+It costs 1 299,99 € or $1,299.99.
+The Unix time 1761300000 and the timestamp 1761300000000 in ms.
+Donaudampfschifffahrtsgesellschaftskapitänsmützenhersteller is one word.
+Pneumonoultramicroscopicsilicovolcanoconiosis2 is a long word with a digit.
+The password is required for this form.
+Set api_key=settings.API_KEY in the config, and password = os.environ["DB_PASSWORD"].
+The ISBN is 978-3-16-148410-0 and the postcode is 75008.
+Order #20261024 shipped; tracking 1Z999AA10123456784 is pending.
+Pin numpy==2.1.0 and react@18.3.1 in the lock file.
+Use the sk-learn style API, the task-runner and the AKIA prefix as an example of a key name.
+Use a 1920x1080 screen at 60 Hz, 4-8-15-16-23-42 is the sequence.
+The id 8b8c846f is short and the range 10.0 to 20.5 is fine.
+In ASCII, # is 0010 0011 and the mask is 011100111.
+Admitted: 06/04/1983 (39), discharged 12/21/2022.
+Draw of the week: 03 04 13 29 36 43, bonus 07.
+[39651:0422/100744.587076:ERROR:gl_factory.cc(102)] init failed
+Self-determination theory names three basic psychological needs.
+debug1: Trying private key: /home/build/.ssh/id_rsa
+Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.5481.77 Safari/537.36
+See section 5.1.2.1 and section 5.1.1.6 of the policy.
+The cursor sits at ::2 in the editor.
+Totals by week: 30391 28818 28248 27287 and 27826 27612.
+Edit /usr/local/lib/php/extensions/no-debug-non-zts-20200930/xdebug.so in php.ini.
+Load /vendor/lib64/egl/libGLESv2_adreno.so first.
+Graphs: mergeConv2dAndDepthToSpace_graph and mergeConv2dAndBatchnorm_graph.
+String COLUMN_PASSWORD = "password"; String COLUMN_TOKEN = "token";
+融资余额3.95亿元（09-26） 2023-09-27 08:52:19
+File EXP-JGM:0043585/2012 of the registry.
+Set the password to "yourpassword" and the secret to "true" in the example.
