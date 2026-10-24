@@ -1,9 +1,17 @@
-# Expected outcome (drop or keep), a tab, then a prompt that mixes scripts. Invented data only.
+# Expected outcome (drop or keep), a tab, then a prompt that mixes scripts. One letter of an uncovered script drops
+# the line, whatever surrounds it. Invented data only.
 drop	Please translate this address for me: Ольга Смирнова, ул. Ленина, д. 12, кв. 5, Казань
 drop	Меня зовут Ольга Смирнова, ул. Ленина, д. 12. Please reply in English, thanks a lot.
 drop	Can you check this sentence for me: 東京都新宿区西新宿2丁目8番1号に住んでいます。
+drop	Translate привет into English
 drop	Translate the word привет into English, please, for my class.
 drop	My friend Иванов wrote this, can you fix it?
-keep	I am writing an essay about the history of greetings across Europe and the way the Russian word привет is used between close friends, family members and colleagues in informal settings every day.
+drop	We are planning the quarterly review for the whole team next week and need a short agenda. My colleague Иван will call.
+drop	Олег lives at 12 Baker Street.
+drop	I am writing a long report about the history of the company, its offices and its people, and one of the founders was Ли Хо, who is still active today.
+drop	I am writing an essay about the history of greetings across Europe and the way the Russian word привет is used between close friends, family members and colleagues in informal settings every day.
+drop	Explain the word ラーメン in a menu.
 keep	Explain how the Chinese word 你好 is used in greetings.
 keep	Why does the Korean word 안녕하세요 sound so polite to learners?
+keep	The set ℝ of reals, the constant ℏ, 5 µm, the 1ª edición and the nº 3, with the IPA ˈhɛloʊ.
+keep	Γεια σου, שלום, مرحبا and Ça va? are all greetings.

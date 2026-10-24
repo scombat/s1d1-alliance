@@ -196,9 +196,8 @@ def _mixed_cases():
 
 
 @pytest.mark.parametrize(("expected", "prompt"), list(_mixed_cases()))
-def test_mixed_scripts_drop_on_a_few_uncovered_letters(expected, prompt):
-    # 8 letters or 5 % in uncovered scripts drop the line, whatever surrounds them; a lone short word in a long
-    # text is kept
+def test_one_uncovered_letter_drops_the_line(expected, prompt):
+    # one letter in an uncovered script drops the line, whatever surrounds it: a name can be two letters ("Ли Хо")
     _, reason = clean_line_reason(_base(prompt=prompt), NoDetector())
     assert reason == ("dropped_uncovered_script" if expected == "drop" else None), prompt
 

@@ -22,9 +22,9 @@ The contract it reads is `contract/ingest-v1.md`; `contract/fixtures/valid.ndjso
 2. Reads the object (`google-cloud-storage`, with the identity of the service), splits it into lines, and cleans each
    line (`src/anonymizer/clean.py`). A line is dropped, and counted, when it is not JSON, has no prompt or no string
    `id`, has a `source` other than `capture:community`, `capture:direct` or `capture:selfhosted:<lower-case uuid>`,
-   has a `terms_version` other than `v` and 1 to 3 digits, or has more than a few letters in a script the anonymiser
-   does not cover (see below; counted as `dropped_uncovered_script`). Otherwise the clean line has exactly these
-   keys, in this order:
+   has a `terms_version` other than `v` and 1 to 3 digits, or has a single letter in a script the anonymiser does not
+   cover (see below; counted as `dropped_uncovered_script`). Otherwise the clean line has exactly these keys, in this
+   order:
 
    | key | value |
    |---|---|
@@ -90,13 +90,12 @@ models one by one, since their word splitter cuts on spaces and punctuation only
 
 A script is **covered** when, in the slow tests, the ensemble masks every name and every address of every fixture of
 `tests/fixtures/pii/` written in it (each fixture is one invented sentence with a name, an address and a phone
-number). A prompt is **dropped**, not stored (`src/anonymizer/coverage.py`), when its letters in scripts that are not
-covered reach 8, or are more than 5 % of its letters, whichever comes first: what the anonymiser cannot vouch for does
-not enter the permanent corpus, and a short English lead or trailer around a Russian address (`Please translate: Ольга
-Смирнова, ул. Ленина, д. 12…`) does not save it. A single uncovered word of 7 letters or less is kept only in a text
-long enough for it to be 5 % of the letters or less (140 letters for a 7-letter word): `Translate the word привет into
-English` is dropped, the same word in a 170-letter paragraph is kept, since a lone short word cannot hold a name and
-an address. `tests/fixtures/mixed_scripts.txt` holds these cases.
+number). A prompt is **dropped**, not stored (`src/anonymizer/coverage.py`), as soon as it holds a single letter in a
+script that is not covered: the models miss names in those scripts, and a name can be two letters long (`Ли Хо`), so no
+count or share of such letters would be safe. `Translate привет into English`, `Олег lives at 12 Baker Street.` and a
+long English paragraph ending in `My colleague Иван will call.` are all dropped. Letters that belong to no script and
+hold no name are not counted: ordinal indicators (`nº`, `1ª`), modifier letters (IPA `ˈ ː`), the micro sign,
+letterlike symbols (`ℝ ℏ ℓ`), super- and subscript letters. `tests/fixtures/mixed_scripts.txt` holds these cases.
 
 | script | fixtures | result at the pinned commits | |
 |---|---|---|---|
@@ -112,12 +111,12 @@ an address. `tests/fixtures/mixed_scripts.txt` holds these cases.
 | Thai | th | nothing masked by the models | dropped |
 | any other | none | never tested | dropped |
 
-Han characters count as Japanese when kana are 5 % of the CJK letters (kana and Han, so Latin padding does not count).
-On the router's training set (98 033 prompts of six public sources) this rule drops 10.8 % of the prompts: Cyrillic
-5 710, Japanese 979, then Devanagari, Gurmukhi, Sinhala, Tamil, Telugu, Gujarati, Thai and others; 720 of them are
-mostly in covered scripts, with a few uncovered words. A script becomes covered when a fixture shows it: add the fixture, see the
-slow tests pass, add the script to `COVERED_SCRIPTS`; `test_uncovered_scripts_are_really_missed` fails the day an
-uncovered script is in fact masked.
+Han characters count as Japanese (dropped) when kana are 5 % of the CJK letters (kana and Han, so Latin padding does
+not count), and as Chinese (covered) otherwise. On the router's training set (98 033 prompts of six public sources)
+this rule drops 10.84 % of the prompts (10 628): Cyrillic 5 761, Japanese 991, then Devanagari, Sinhala, Gurmukhi,
+Tamil, Telugu, Gujarati, Thai and others; 796 of them are mostly in covered scripts, with a few uncovered letters.
+A script becomes covered when a fixture shows it: add the fixture, see the slow tests pass, add the script to
+`COVERED_SCRIPTS`; `test_uncovered_scripts_are_really_missed` fails the day an uncovered script is in fact masked.
 
 ## The patterns
 

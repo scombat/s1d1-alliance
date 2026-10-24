@@ -1,10 +1,10 @@
 """Which writing systems the anonymiser is known to cover, and the fail-closed rule for the others.
 
 A script is covered when, in the slow tests (`tests/fixtures/pii/`), the model ensemble masks every name and every
-address of every fixture written in it. A prompt with more than a few letters in scripts that are not covered (tested
-and missed, or never tested) is dropped rather than stored: what the anonymiser cannot vouch for does not enter the
-permanent corpus, and a short English lead or trailer around a Russian address does not make it covered. No I/O, no
-logging.
+address of every fixture written in it. A prompt with a single letter in a script that is not covered (tested and
+missed, or never tested) is dropped rather than stored: the models miss names in those scripts, and a name can be two
+letters long ("Ли Хо"), so no count or share of such letters is safe. What the anonymiser cannot vouch for does not
+enter the permanent corpus. No I/O, no logging.
 """
 
 from __future__ import annotations
@@ -16,11 +16,9 @@ from functools import lru_cache
 COVERED_SCRIPTS = frozenset({"LATIN", "GREEK", "HEBREW", "ARABIC", "HAN", "HANGUL"})
 # Tested and missed at the pinned revisions: Cyrillic (ru.txt: the address), Japanese (ja.txt: the address),
 # Devanagari (hi.txt: name and address), Thai (th.txt: name and address). Any other script was never tested.
-# A prompt is dropped when its letters in uncovered scripts reach UNCOVERED_LETTERS, or are more than UNCOVERED_SHARE
-# of its letters, whichever comes first. A single uncovered word of 7 letters or less is kept only in a text long
-# enough for it to be 5 % of the letters or less (140 letters for 7): a lone word cannot be a name and an address.
-UNCOVERED_LETTERS = 8
-UNCOVERED_SHARE = 0.05
+# Letters that belong to no script of their own, and hold no name: ordinal indicators (nº, 1ª), modifier letters
+# (IPA ˈ ː), the micro sign, letterlike symbols (ℝ ℏ ℓ ℹ), super- and subscript letters. They count as COMMON, covered.
+COMMON = "COMMON"
 _KANA_SHARE = 0.05  # kana / (kana + Han) from which the Han characters are read as Japanese
 
 
@@ -31,14 +29,20 @@ def script_of(ch: str) -> str:
         name = unicodedata.name(ch)
     except ValueError:
         return "UNKNOWN"
-    if name.startswith(("CJK UNIFIED IDEOGRAPH", "CJK COMPATIBILITY IDEOGRAPH")):
+    if name.startswith(("CJK UNIFIED IDEOGRAPH", "CJK COMPATIBILITY IDEOGRAPH", "IDEOGRAPHIC")):
         return "HAN"
-    if name.startswith(("FULLWIDTH LATIN", "MATHEMATICAL", "LATIN")):
-        return "LATIN"
-    if name.startswith("HALFWIDTH KATAKANA"):
-        return "KATAKANA"
+    if name.startswith(("HALFWIDTH KATAKANA", "KATAKANA")):
+        return "KATAKANA"  # also the prolonged sound mark, KATAKANA-HIRAGANA PROLONGED SOUND MARK
     if name.startswith(("HALFWIDTH HANGUL", "HANGUL")):
         return "HANGUL"
+    if name.startswith(("MODIFIER LETTER", "FEMININE ORDINAL", "MASCULINE ORDINAL", "MICRO SIGN")) or (
+        0x2100 <= ord(ch) <= 0x214F  # letterlike symbols
+    ):
+        return COMMON
+    if name.startswith(("SUPERSCRIPT LATIN", "SUBSCRIPT LATIN")):
+        return COMMON
+    if name.startswith(("FULLWIDTH LATIN", "MATHEMATICAL", "LATIN")):
+        return "LATIN"
     return name.split(" ", 1)[0]
 
 
@@ -60,8 +64,5 @@ def letter_scripts(text: str) -> dict[str, int]:
 
 
 def is_uncovered(text: str) -> bool:
-    """True when the letters in uncovered scripts reach 8, or are more than 5 % of the letters."""
-    counts = letter_scripts(text)
-    letters = sum(counts.values())
-    uncovered = sum(n for script, n in counts.items() if script not in COVERED_SCRIPTS)
-    return uncovered >= UNCOVERED_LETTERS or (letters > 0 and uncovered > UNCOVERED_SHARE * letters)
+    """True as soon as one letter is in a script the anonymiser does not cover (Han read as Japanese included)."""
+    return any(script not in COVERED_SCRIPTS and script != COMMON for script in letter_scripts(text))

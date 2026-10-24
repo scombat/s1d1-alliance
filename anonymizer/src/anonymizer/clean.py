@@ -2,7 +2,7 @@
 
 Every key of a clean line is constrained: the prompt is anonymised, the metadata must be one of the values tantive
 emits (anything else becomes null), and a line whose source or terms version is not one of the known forms is
-dropped. A prompt written mostly in a script the anonymiser does not cover is dropped too (`coverage.py`).
+dropped. A prompt with a single letter in a script the anonymiser does not cover is dropped too (`coverage.py`).
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ def clean_line(raw: object, detector: Detector) -> dict | None:
     `pred_task` must be values tantive emits, `model_revision` a hex revision, the `pred_*` numbers probabilities in
     [0, 1]: otherwise null. The line is dropped without a prompt, without a string id, without a known source
     (`capture:community`, `capture:direct`, `capture:selfhosted:<lower-case uuid>`) or terms version (`v` and 1 to 3
-    digits), or when its prompt has more than a few letters in a script the anonymiser does not cover.
+    digits), or when its prompt has a single letter in a script the anonymiser does not cover.
     """
     return clean_line_reason(raw, detector)[0]
 
