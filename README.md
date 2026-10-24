@@ -15,11 +15,11 @@ Nothing runs there that is not in this repository, and nothing in this repositor
 ```
                            s1d1.qoo.gy  (Cloudflare zone)
           ┌────────────────────────┼──────────────────────────────┐
-          │ /                      │ /api/*  (100 req/10 s per IP) │ /ingest
+          │ /                      │ /api/*                        │ /ingest
           ▼                        ▼                              ▼
-     static landing           Worker "api"                   Worker "ingest"
-     + /status.json           closed paths, cache,           bounded batches,
-                              SHA-256 of the body,           fail closed
+     static landing           Worker "site"                  Worker "ingest"
+     + /status.json           closed paths, 100 req/10 s     bounded batches,
+                              per IP, cache by SHA-256,      fail closed
                               fail open                            │
                                    │ miss                          │
                                    ▼                               ▼
@@ -35,7 +35,8 @@ Nothing runs there that is not in this repository, and nothing in this repositor
 ```
 
 - The landing is static. `/status.json` says what runs; `/llms.txt` is the guide for agents.
-- `/api/*` accepts a closed list of paths only. Anything else answers 404.
+- `/api/*` accepts a closed list of paths only. Anything else answers 404. It is limited to 100 requests per 10 s per
+  IP, by the `site` Worker itself (a Workers Rate Limiting binding, not a zone rule).
 - Only the paths of the API leave the Cloudflare Tunnel; the nodes publish no port.
 - A prompt goes to the raw bucket for 3 days, then is anonymised into the clean bucket. The clean copy keeps no
   instance identifier, no IP address and no headers. The contract is in `contract/ingest-v1.md`.
