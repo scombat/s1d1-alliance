@@ -1,7 +1,7 @@
 # terraform
 
 Infrastructure of the public instance `s1d1.qoo.gy`, in HCP Terraform (workspace `s1d1-alliance`).
-This folder holds the Cloudflare part (tunnel, DNS, Workers, routes, rate limit, R2) and the Google Cloud part (raw
+This folder holds the Cloudflare part (tunnel, DNS, Workers, routes, R2) and the Google Cloud part (raw
 bucket, service accounts, anonymizer on Cloud Run, Eventarc, budget, CI identity): `gcp.tf`, `budget.tf`, `wif.tf`.
 
 Providers are pinned exactly: `cloudflare/cloudflare = 5.28.1`, `hashicorp/google = 8.8.1`, `hashicorp/random = 3.9.1`, `hetznercloud/hcloud = 1.70.1`
@@ -98,18 +98,20 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
 - `CNAME s1d1` to `<tunnel id>.cfargotunnel.com`, proxied.
 - Workers `s1d1-site` (static files of `../site`, Analytics Engine binding `VISITS` on dataset `s1d1_visits`) and
   `s1d1-ingest`; routes `s1d1.qoo.gy/*` to the first and `s1d1.qoo.gy/ingest` to the second.
-- Ruleset `http_ratelimit`: 100 requests per 10 s per IP on `starts_with(http.request.uri.path, "/api/")`, action
-  `block`, blocked for 10 s.
-- Two `ratelimit` bindings on `s1d1-ingest` (`INGEST_BURST` 100 per 10 s, namespace 1001; `INGEST_SUSTAINED` 100 per
-  60 s, namespace 1002), per client IP, community node exempt: see `workers/ingest/README.md`. They replace the zone
-  rule for `/ingest`, which covers `/api/` only.
+- **No zone ruleset.** The zone `qoo.gy` already has its `http_ratelimit` entrypoint ruleset, which holds the rule of
+  another subdomain, and the Free plan allows a single rate limiting rule per zone: creating ours failed with
+  error 20217. Terraform never manages that ruleset (never declare a `cloudflare_ruleset`, never import the
+  entrypoint), so that rule is never touched. `workers/site/test/terraform.test.js` fails if one appears.
+- Three `ratelimit` bindings, per client IP: `API_BURST` on `s1d1-site` (100 per 10 s, namespace 1003, `/api/*`: see
+  `workers/site/README.md`), and `INGEST_BURST` (100 per 10 s, namespace 1001) and `INGEST_SUSTAINED` (100 per 60 s,
+  namespace 1002) on `s1d1-ingest`, community node exempt: see `workers/ingest/README.md`.
 - R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it, with the one permission group
   `Workers R2 Storage Bucket Item Write`: the anonymizer only writes (`PutObject`), so `Item Read` is not granted. R2
   has no write-only object permission: `Item Write` is the dashboard's "Object Read & Write" and also allows reading
   and listing that bucket's objects (https://developers.cloudflare.com/r2/api/tokens/). The bucket scope is the limit.
 - `random_password.community_token` (48 characters, no special character).
 - `cloudflare_workers_script_subdomain` with `enabled = false` for both Workers, so that they are served by the
-  routes only (a workers.dev copy of the site Worker would not go through the zone's rate limit). If the apply
+  routes only (a workers.dev copy of the site Worker would be reached without the hostname's route). If the apply
   fails on these two resources because the account has no workers.dev subdomain registered, either register one
   once (dashboard: Workers & Pages, "Your subdomain"; nothing is exposed since the Workers are then disabled on
   it) and re-run, or remove the two `cloudflare_workers_script_subdomain` blocks from `workers.tf` and check by hand
@@ -210,7 +212,8 @@ Create the provider token in the dashboard with the permissions that the provide
   offers this permission only through the "Create additional tokens" template, not in the custom token builder: start
   the provider token from that template and add the other permissions to it. A token cannot grant more than its
   creator holds, so the provider token also needs the R2 write permission above.
-- Zone `qoo.gy`: Workers Routes Write, DNS Write, and the zone ruleset (Zone WAF / rate limiting) write permission.
+- Zone `qoo.gy`: Workers Routes Write, DNS Write. No ruleset (Zone WAF / rate limiting) permission is needed: Terraform
+  does not manage any zone ruleset (see above).
 
 ## Hetzner node (`hetzner.tf`)
 
@@ -263,19 +266,31 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
    `terraform output -raw tunnel_token`.
 3. **Google Cloud bootstrap, by hand, once.** A project with billing linked, `serviceusage.googleapis.com` and
    `cloudresourcemanager.googleapis.com` enabled (Terraform enables the other APIs but needs these two to do it), and a
-   service account for HCP (`GOOGLE_CREDENTIALS` on the workspace, or dynamic provider credentials) with: Project IAM
-   Admin, Service Usage Admin, Storage Admin (it covers the HMAC key), Service Account Admin,
+   service account for HCP with: Project IAM
+   Admin, Service Usage Admin, Storage Admin, **Storage HMAC Key Admin (`roles/storage.hmacKeyAdmin`)** (Storage Admin
+   does not grant `storage.hmacKeys.create`: the first apply failed on the HMAC key without it), Service Account Admin,
    Cloud Run Admin, Eventarc Admin, Pub/Sub Admin, Secret Manager Admin, Artifact Registry Administrator, Workload
    Identity Pool Admin, `iam.serviceAccountUser` on the three runtime accounts, and Billing Account Costs Manager
    (or Billing Account Administrator) **on the billing account** for the budget. This account is the most powerful
    credential of the project: keep it out of the repository and rotate it.
+
+   Recommended way to give HCP that account: **dynamic provider credentials** (workload identity, no key to store). In
+   a workload identity pool `hcp-terraform` (OIDC provider for `https://app.terraform.io`) with an attribute condition
+   limited to organization `scombat` and workspace `s1d1-alliance`, let that pool impersonate the service account
+   (`roles/iam.workloadIdentityUser`), then set these environment variables on the workspace:
+   `TFC_GCP_PROVIDER_AUTH` = `true`, `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL` (the service account) and
+   `TFC_GCP_WORKLOAD_PROVIDER_NAME` (`projects/<number>/locations/global/workloadIdentityPools/hcp-terraform/providers/<provider>`).
+   The alternative is a service account key in the sensitive environment variable `GOOGLE_CREDENTIALS`, which is a
+   long-lived secret.
 4. **First image.** The image must exist in Artifact Registry before the Cloud Run service is created, so the first
    apply runs with `anonymizer_image` null (its default) and creates no anonymizer; the CI then pushes the image
    (`workflow_dispatch`), a pull request adds `terraform/images.auto.tfvars` with its digest, and the next apply
    creates the anonymizer. No `-target` is needed (the workspace is VCS-driven). Details: `docs/operations.md`,
    section 3.
 5. **Currency.** `budget_currency` must equal the billing account's currency; the API rejects the budget otherwise.
-6. **Account.** R2 must be enabled on the account before the first apply.
+6. **Account.** R2 must be enabled on the account before the first apply, and so must **Analytics Engine** (dashboard:
+   Workers & Pages, Analytics Engine, enable once): without it the `VISITS` binding of the site Worker fails the
+   apply with error 10089.
 
 ## Cloudflare behaviours that matter here
 
@@ -283,10 +298,9 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
   of a same-zone `fetch()` call", and `fetch()` from a route Worker goes to the application server defined in the
   zone's DNS (here the tunnel CNAME), see https://developers.cloudflare.com/workers/configuration/routing/routes/.
   This holds for **routes**; a Custom Domain on the same hostname would invoke the Worker again, so never add one.
-- **Rate limit and same-zone subrequests.** Cloudflare may count a Worker's same-zone subrequest as a second
-  request (https://developers.cloudflare.com/waf/rate-limiting-rules/troubleshooting). Its remedy adds
-  `cf.worker.upstream_zone` to the expression; the Free plan restricts the rule's fields, so the expression is kept
-  as specified. Watch the first days of traffic: if legitimate callers are blocked sooner than 100 requests per
-  10 s, that is why.
-- **Free plan.** One rate limit rule, period 10 s, mitigation 10 s, count per IP (and per data centre, `cf.colo.id`
-  is implicit).
+- **Rate limit in the Worker, not in the zone.** The Free plan allows one rate limiting rule per zone and `qoo.gy`'s
+  is used by another subdomain, so `/api/*` is limited by the `API_BURST` binding of the site Worker. The Worker's own
+  subrequest to the origin is not counted (the binding counts only the calls the code makes). The count is
+  approximate and per Cloudflare location. Trade-off: when the Workers daily request quota is exhausted the route
+  fails open (manual step 1), `/api/*` goes straight to the tunnel and has no rate limit; the tunnel ingress still
+  allows the API paths only and the deadline shedding of tantive still protects its capacity.
