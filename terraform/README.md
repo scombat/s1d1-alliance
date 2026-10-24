@@ -18,6 +18,14 @@ terraform login            # or TF_TOKEN_app_terraform_io
 terraform init
 ```
 
+**The configuration reads files outside `terraform/`**: the Worker sources (`../workers/site/src`,
+`../workers/ingest/src`, `../workers/ingest/vendor`) and the static site (`../site`). So the HCP workspace must be
+VCS-driven with the **repository root as VCS root and Terraform Working Directory = `terraform`** (Settings, General,
+"Terraform Working Directory"): the whole repository is then checked out for each run. A workspace whose upload
+contains only `terraform/` fails at plan with "no such file". For a CLI-driven run, start it **from the repository
+root** with the working directory set the same way (`TF_WORKSPACE`/the `cloud` block, then `terraform -chdir=terraform
+plan`), so that the CLI uploads the whole repository, not only `terraform/`.
+
 The workspace runs remotely, so the variables below are set on the workspace (sensitive ones marked as such), not in
 a file. `*.tfvars` is ignored by git; never commit one.
 
@@ -73,7 +81,17 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
 - R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it (object read and write).
 - `random_password.community_token` (48 characters, no special character).
 - `cloudflare_workers_script_subdomain` with `enabled = false` for both Workers, so that they are served by the
-  routes only (a workers.dev copy of the site Worker would not go through the zone's rate limit).
+  routes only (a workers.dev copy of the site Worker would not go through the zone's rate limit). If the apply
+  fails on these two resources because the account has no workers.dev subdomain registered, either register one
+  once (dashboard: Workers & Pages, "Your subdomain"; nothing is exposed since the Workers are then disabled on
+  it) and re-run, or remove the two `cloudflare_workers_script_subdomain` blocks from `workers.tf` and check by hand
+  that `s1d1-site.<subdomain>.workers.dev` does not answer.
+
+A change to any Worker file or to `../site` redeploys: the provider hashes at plan time each `files` entry
+(`files.<name>.content_sha256`, computed from `content_file`) and the whole asset folder
+(`assets.asset_manifest_sha256`, from `assets.directory`), and the main module through `content_sha256`, so editing
+`api.js`, `cache.js`, `gcs.js`, `validate.js`, `vendor/aws4fetch.js` or any site file shows as a diff. Nothing else
+is needed (see the comment in `workers.tf`).
 
 How the Workers are uploaded: no build and no bundler. `content_file` is the main module (`src/index.js`) and the
 other modules are `files` entries named by their path (`src/api.js`, `vendor/aws4fetch.js`, ...), so the relative

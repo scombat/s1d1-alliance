@@ -25,4 +25,5 @@ output "r2_secret_access_key" {
 output "r2_endpoint" {
   description = "S3 endpoint of the EU jurisdiction (not a secret)."
   value       = "https://${var.cloudflare_account_id}.eu.r2.cloudflarestorage.com"
+  sensitive   = false # not a secret: the account id is not one and the endpoint is needed in clear by the anonymizer
 }

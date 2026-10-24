@@ -1,6 +1,13 @@
 # The two Workers are uploaded as ES modules without a build step: the main module and its imports are separate
 # multipart parts (`content_file` and `files`). A part is named after its path relative to the Worker folder, so
 # `import "./gcs.js"` and `import "../vendor/aws4fetch.js"` resolve inside the upload exactly as they do on disk.
+#
+# Redeploy on any file change: `content_sha256` here must equal the hash of `content_file` (the provider validates it,
+# and refresh overwrites it with the hash of the deployed main module), so it can only cover index.js. The other
+# files need no trigger of ours: for each `files` entry the provider computes `content_sha256` at plan time from its
+# `content_file`, and for `assets.directory` it computes `asset_manifest_sha256` from the folder. Either one changing
+# makes the plan an in-place update that uploads the whole Worker again (provider 5.28.1, workers_script/custom.go and
+# assets.go). A `replace_triggered_by` would delete and recreate the script (and detach its route), so it is not used.
 locals {
   compatibility_date = "2026-09-01"
   module_type        = "application/javascript+module"
