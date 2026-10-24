@@ -1,6 +1,6 @@
 # gitleaks configuration for s1d1-alliance.
 # The default rule set is kept; this file only adds the allowlist below.
-# Run locally by the pre-commit hook (see .pre-commit-config.yaml) and by the CI secrets job.
+# Run locally by the pre-commit hook (see .pre-commit-config.yaml) and by the CI `secrets` job (.github/workflows/ci.yml).
 
 title = "s1d1-alliance"
 

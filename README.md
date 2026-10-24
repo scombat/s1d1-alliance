@@ -54,7 +54,7 @@ Tokens, keys, OCIDs and `terraform.tfvars` are given to HCP Terraform or to the 
 
 ## Secrets
 
-- `gitleaks` runs as a pre-commit hook and in the CI `secrets` job. It is the installed binary, version 8.30.1.
+- `gitleaks` runs as a pre-commit hook and in the CI `secrets` job of `.github/workflows/ci.yml`. It is the installed binary, version 8.30.1.
 - Install the hook once with `uvx pre-commit install`. Check the whole tree with `uvx pre-commit run --all-files`.
 - `.gitignore` keeps `*.tfvars`, `*.env` and `.terraform/` out of the repository, except the two node templates.
 
