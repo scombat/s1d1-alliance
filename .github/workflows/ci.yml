@@ -52,7 +52,7 @@ jobs:
 
       - name: Run the Worker tests
         if: hashFiles('workers/**') != ''
-        run: node --test workers/
+        run: node --test "workers/**/*.test.js"
 
   anonymizer:
     name: anonymizer

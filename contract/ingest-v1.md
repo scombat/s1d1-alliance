@@ -42,7 +42,7 @@ The Worker adds two keys to every kept line before it is stored:
 - `source`: one of the three values below;
 - `received`: the UTC day the batch was received, `YYYY-MM-DD`.
 
-The fixtures: `valid.ndjson` has three valid lines, one per source; `mixed.ndjson` has the same three plus one line
+The fixtures: `valid.ndjson` has three valid lines, one per source (the tests send it with `Authorization: Bearer <community token>`, so line 1 is the community case; line 2 carries a self-hosted UUID and line 3 has no `instance_id`, so it is direct); `mixed.ndjson` has the same three plus one line
 without `terms_version` and one line that is not JSON.
 
 ## The sources
