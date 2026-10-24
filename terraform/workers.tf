@@ -92,6 +92,11 @@ resource "cloudflare_workers_script" "ingest" {
     { name = "GCS_HMAC_SECRET", type = "secret_text", text = local.gcs_hmac_secret },
     { name = "COMMUNITY_TOKEN", type = "secret_text", text = random_password.community_token.result },
     { name = "MAINTENANCE", type = "plain_text", text = var.maintenance },
+    # Workers Rate Limiting, per client IP, approximate and per Cloudflare location. The namespace ids are integers
+    # chosen here (as a string in the provider); each must be unique in the account. workers/ingest/README.md.
+    # The period is 10 or 60 s only. workers/ingest/test/terraform.test.js checks that both names stay declared.
+    { name = "INGEST_BURST", type = "ratelimit", namespace_id = "1001", simple = { limit = 100, period = 10 } },
+    { name = "INGEST_SUSTAINED", type = "ratelimit", namespace_id = "1002", simple = { limit = 100, period = 60 } },
   ]
 }
 
