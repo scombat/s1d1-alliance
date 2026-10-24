@@ -1,12 +1,22 @@
-"""anonymize() and clean_line(): from a raw line to a line of the clean corpus (decision 11). No I/O."""
+"""anonymize() and clean_line(): from a raw line to a line of the clean corpus (decision 11). No I/O.
+
+Every key of a clean line is constrained: the prompt is anonymised, the metadata must be one of the values tantive
+emits (anything else becomes null), and a line whose source or terms version is not one of the known forms is
+dropped. A prompt written mostly in a script the anonymiser does not cover is dropped too (`coverage.py`).
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
 
-from anonymizer.detector import Detector, Span
-from anonymizer.patterns import find_patterns
+from anonymizer.coverage import is_uncovered
+from anonymizer.detector import Detector
+from anonymizer.patterns import find_patterns, merge_spans
+
+__all__ = ["CLEAN_KEYS", "anonymize", "clean_line", "clean_line_reason", "dumps_line", "merge_spans"]
 
 # The keys of a clean line, in this order (decision 11). Never instance_id, the IP address or the headers.
 CLEAN_KEYS = (
@@ -23,28 +33,44 @@ CLEAN_KEYS = (
     "pred_needs_tools",
     "pred_confidence",
 )
+
+# The values tantive emits: the formats it serves, the native and LiteLLM tier sets (tiers.py), the 19 tasks (tasks.py).
+FORMATS = frozenset({"systemone", "decisions", "chat", "classify", "predict"})
+TIERS = frozenset({"TRIVIAL", "LOW", "MEDIUM", "HIGH", "EXPERT", "SIMPLE", "COMPLEX", "REASONING"})
+TASKS = frozenset(
+    {
+        "information_seeking",
+        "reasoning",
+        "planning",
+        "editing",
+        "summarization",
+        "extraction",
+        "classification",
+        "translation",
+        "coding_debugging",
+        "math",
+        "data_analysis",
+        "writing",
+        "role_playing",
+        "advice_seeking",
+        "brainstorming",
+        "completion",
+        "action_execution",
+        "chat",
+        "other",
+    }
+)
+_PROBABILITIES = ("pred_score", "pred_needs_tools", "pred_confidence")
+
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_REVISION = re.compile(r"[0-9a-f]{7,40}")
+_TERMS = re.compile(r"v[0-9]{1,3}")
+_SOURCE = re.compile(r"capture:community|capture:direct|capture:selfhosted:" + _UUID.pattern)
 
-
-def merge_spans(spans: list[Span], length: int) -> list[Span]:
-    """The union of the spans: overlapping spans become one, whose marker is that of the longest.
-
-    Spans are clamped to the text; empty ones are dropped. Spans that only touch stay separate. Among spans of the
-    same length, the first one (by start) gives the marker.
-    """
-    clamped = sorted((max(0, s), min(length, e), m) for s, e, m in spans if min(length, e) > max(0, s))
-    merged: list[Span] = []
-    longest = 0
-    for start, end, marker in clamped:
-        if merged and start < merged[-1][1]:
-            s0, e0, m0 = merged[-1]
-            if end - start > longest:
-                longest, m0 = end - start, marker
-            merged[-1] = (s0, max(e0, end), m0)
-        else:
-            merged.append((start, end, marker))
-            longest = end - start
-    return merged
+# Why a line was dropped: the counter of the object's log line.
+DROPPED = "dropped"
+UNCOVERED_SCRIPT = "dropped_uncovered_script"
 
 
 def anonymize(text: str, detector: Detector) -> str:
@@ -64,28 +90,69 @@ def _day(raw: dict) -> str | None:
     return None
 
 
-def clean_line(raw: dict, detector: Detector) -> dict | None:
-    """The decision-11 line of a raw line, prompt anonymised and time cut to the day; None without a prompt.
+def _clean_id(value: object) -> str:
+    """A UUID (in lower case); anything else (a sender may put anything there) as the first 32 hex of its SHA-256."""
+    text = value if isinstance(value, str) else json.dumps(value)
+    if _UUID.fullmatch(text.lower()):
+        return text.lower()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
-    `time` is the capture day; when the line has no usable `time`, the day the Worker received it (`received`).
-    Absent or null optional keys are left out.
-    """
-    if not isinstance(raw, dict):
+
+def _probability(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
+    value = float(value)
+    return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
+
+
+def _member(value: object, allowed: frozenset[str]) -> str | None:
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def _matching(value: object, pattern: re.Pattern[str]) -> str | None:
+    return value if isinstance(value, str) and pattern.fullmatch(value) else None
+
+
+def clean_line_reason(raw: object, detector: Detector) -> tuple[dict | None, str | None]:
+    """The clean line and None, or None and the reason it was dropped (DROPPED or UNCOVERED_SCRIPT)."""
+    if not isinstance(raw, dict):
+        return None, DROPPED
     prompt = raw.get("prompt")
     if not isinstance(prompt, str) or not prompt:
-        return None
-    out: dict = {}
-    for key in CLEAN_KEYS:
-        if key == "prompt":
-            out[key] = anonymize(prompt, detector)
-        elif key == "time":
-            day = _day(raw)
-            if day is not None:
-                out[key] = day
-        elif raw.get(key) is not None:
-            out[key] = raw[key]
-    return out
+        return None, DROPPED
+    source = _matching(raw.get("source"), _SOURCE)
+    terms = _matching(raw.get("terms_version"), _TERMS)
+    if source is None or terms is None:
+        return None, DROPPED
+    if is_uncovered(prompt):
+        return None, UNCOVERED_SCRIPT
+    values = {
+        "id": _clean_id(raw.get("id")),
+        "time": _day(raw),
+        "prompt": anonymize(prompt, detector),
+        "source": source,
+        "model_revision": _matching(raw.get("model_revision"), _REVISION),
+        "terms_version": terms,
+        "format": _member(raw.get("format"), FORMATS),
+        "pred_tier": _member(raw.get("pred_tier"), TIERS),
+        "pred_task": _member(raw.get("pred_task"), TASKS),
+        **{key: _probability(raw.get(key)) for key in _PROBABILITIES},
+    }
+    return {key: values[key] for key in CLEAN_KEYS}, None
+
+
+def clean_line(raw: object, detector: Detector) -> dict | None:
+    """The decision-11 line of a raw line, or None when it is dropped.
+
+    Every key is present, in the order of CLEAN_KEYS. `time` is the capture day; without a usable `time`, the day
+    the Worker received the line (`received`); null when neither is there. `id` is kept when it is a UUID
+    (lower-cased), otherwise replaced by the first 32 hex of its SHA-256. `format`, `pred_tier` and `pred_task` must
+    be values tantive emits, `model_revision` a hex revision, the `pred_*` numbers probabilities in [0, 1]: otherwise
+    null. The line is dropped without a prompt, without a known source (`capture:community`, `capture:direct`,
+    `capture:selfhosted:<lower-case uuid>`) or terms version (`v` and 1 to 3 digits), or when its prompt is mostly in
+    a script the anonymiser does not cover.
+    """
+    return clean_line_reason(raw, detector)[0]
 
 
 def dumps_line(line: dict) -> str:

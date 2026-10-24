@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 
 from fakes import FakeDetector, NoDetector, clean_expected_text, raw_valid_lines
 
-from anonymizer.clean import CLEAN_KEYS, anonymize, clean_line, dumps_line
+from anonymizer.clean import CLEAN_KEYS, anonymize, clean_line, clean_line_reason, dumps_line
 
 DECISION_11 = [
     "id",
@@ -75,7 +77,7 @@ def test_clean_line_anonymises_the_prompt_only():
     assert "ip" not in out and "headers" not in out
 
 
-def test_clean_line_without_prompt_is_none():
+def test_clean_line_without_prompt_is_none():  # and nothing but a dict is a line
     base = raw_valid_lines()[0]
     assert clean_line({k: v for k, v in base.items() if k != "prompt"}, NoDetector()) is None
     assert clean_line({**base, "prompt": ""}, NoDetector()) is None
@@ -89,17 +91,93 @@ def test_clean_line_time_falls_back_to_the_received_day():
     assert clean_line(without_time, NoDetector())["time"] == "2026-10-24"
     assert clean_line({**base, "time": "yesterday"}, NoDetector())["time"] == "2026-10-24"
     neither = {k: v for k, v in without_time.items() if k != "received"}
-    assert "time" not in clean_line(neither, NoDetector())
+    assert clean_line(neither, NoDetector())["time"] is None
 
 
-def test_missing_optional_keys_are_left_out():
-    raw = {"v": 1, "id": "a", "prompt": "hi", "terms_version": "v1", "source": "capture:direct", "pred_score": None}
-    assert clean_line(raw, NoDetector()) == {
-        "id": "a",
+def test_missing_optional_keys_are_null():
+    raw = {"v": 1, "id": UUID, "prompt": "hi", "terms_version": "v1", "source": "capture:direct", "pred_score": None}
+    out = clean_line(raw, NoDetector())
+    assert list(out) == DECISION_11
+    assert out == {
+        **dict.fromkeys(DECISION_11),
+        "id": UUID,
         "prompt": "hi",
         "source": "capture:direct",
         "terms_version": "v1",
     }
+
+
+UUID = "8b8c846f-d861-4d21-a86b-4582c8e5209a"
+
+
+def _base(**changes):
+    return {**raw_valid_lines()[0], **changes}
+
+
+def test_metadata_outside_the_known_values_becomes_null():
+    out = clean_line(
+        _base(format="soap", pred_tier="GIGANTIC", pred_task="general_qa", model_revision="main; rm -rf /"),
+        NoDetector(),
+    )
+    assert out["format"] is None and out["pred_tier"] is None and out["pred_task"] is None
+    assert out["model_revision"] is None
+    for tier in ("TRIVIAL", "LOW", "MEDIUM", "HIGH", "EXPERT", "SIMPLE", "COMPLEX", "REASONING"):
+        assert clean_line(_base(pred_tier=tier), NoDetector())["pred_tier"] == tier
+    for fmt in ("systemone", "decisions", "chat", "classify", "predict"):
+        assert clean_line(_base(format=fmt), NoDetector())["format"] == fmt
+    assert clean_line(_base(pred_task="coding_debugging"), NoDetector())["pred_task"] == "coding_debugging"
+    assert clean_line(_base(model_revision="3c9e1f2a" * 5), NoDetector())["model_revision"] == "3c9e1f2a" * 5
+    assert clean_line(_base(model_revision="3C9E1F2"), NoDetector())["model_revision"] is None
+
+
+def test_probabilities_must_be_finite_numbers_in_0_1():
+    for bad in (True, False, -0.1, 1.5, float("nan"), float("inf"), "0.5", [0.5]):
+        out = clean_line(_base(pred_score=bad, pred_needs_tools=bad, pred_confidence=bad), NoDetector())
+        assert out["pred_score"] is None and out["pred_needs_tools"] is None and out["pred_confidence"] is None, bad
+    out = clean_line(_base(pred_score=1, pred_needs_tools=0, pred_confidence=0.5), NoDetector())
+    assert (out["pred_score"], out["pred_needs_tools"], out["pred_confidence"]) == (1.0, 0.0, 0.5)
+    assert isinstance(out["pred_score"], float)
+
+
+def test_an_unknown_source_or_terms_version_drops_the_line():
+    for source in ("capture:evil", "capture:selfhosted:NOT-A-UUID", f"capture:selfhosted:{UUID.upper()}", None, 3):
+        assert clean_line_reason(_base(source=source), NoDetector()) == (None, "dropped"), source
+    for terms in ("1", "v", "v1234", "v1; drop", None, 1):
+        assert clean_line_reason(_base(terms_version=terms), NoDetector()) == (None, "dropped"), terms
+    assert clean_line(_base(source=f"capture:selfhosted:{UUID}"), NoDetector())["source"].endswith(UUID)
+    assert clean_line(_base(terms_version="v12"), NoDetector())["terms_version"] == "v12"
+
+
+def test_an_id_that_is_not_a_uuid_is_hashed():
+    assert clean_line(_base(id=UUID), NoDetector())["id"] == UUID
+    assert clean_line(_base(id=UUID.upper()), NoDetector())["id"] == UUID
+    expected = hashlib.sha256(b"jane@example.com").hexdigest()[:32]
+    assert clean_line(_base(id="jane@example.com"), NoDetector())["id"] == expected
+    assert re.fullmatch(r"[0-9a-f]{32}", clean_line(_base(id=42), NoDetector())["id"])
+
+
+def test_a_prompt_mostly_in_an_uncovered_script_is_dropped():
+    detector = FakeDetector([(0, 3, "[PERSON]")])
+    for prompt in (
+        "Меня зовут Ольга, я живу в Казани.",  # Cyrillic
+        "東京都に住んでいる山田です。",  # Japanese
+        "मेरा नाम राहुल है।",  # Devanagari
+        "ผมชื่อสมชาย",  # Thai
+        "Მე მქვია გიორგი.",  # Georgian: never tested, so not covered
+    ):
+        assert clean_line_reason(_base(prompt=prompt), detector) == (None, "dropped_uncovered_script"), prompt
+    assert detector.calls == 0  # dropped before the model runs
+    for prompt in (
+        "我叫王伟。",
+        "اسمي ليلى.",
+        "שמי דוד.",
+        "Με λένε Γιώργο.",
+        "저는 김민준입니다.",
+        "Je m'appelle Léa.",
+    ):
+        assert clean_line(_base(prompt=prompt), NoDetector()) is not None, prompt
+    # mostly Latin with a Russian word: kept (and anonymised as Latin text)
+    assert clean_line(_base(prompt="Translate the word привет into English, please, for my class."), NoDetector())
 
 
 def test_valid_fixture_matches_clean_expected():

@@ -40,3 +40,17 @@
 [EMAIL]	Write to uzeda.ssa@example.comEduardo for the form.
 [SECRET]	Open https://drive.google.com/file/d/1XcIF4Y8LEI8o0SMvFpdGcycil8eMy15j/view to see it.
 [SECRET]	Authorization: Basic dXNlcjpodW50ZXIy
+[EMAIL]	Écrivez à marie.lefèvre@exemple.fr avant lundi.
+[EMAIL]	Schreib an jürgen.müller@web.de bitte.
+[EMAIL]	Пишите на иван@почта.рф сегодня.
+[EMAIL]	发到王伟@qq.com就行。
+[SECRET]	Commit 3f786850e387550fdab836ed7e6dc881de23001b broke the build.
+[SECRET]	sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+[SECRET]	The api key is 4f9c2e7a1b3d5f8e0a6c9b2d4e7f1a3c here.
+[SECRET]	The password is sunshine for the guest account.
+[SECRET]	Mon mot de passe : soleil
+[SECRET]	Mi contraseña es mariposa, no la compartas.
+[SECRET]	Mein Passwort ist Sonnenblume.
+[SECRET]	Мой пароль: подсолнух
+[PHONE]	Chiamami al 333 123 4567 stasera.
+[PHONE]	Il mio cellulare è 347 1234567.

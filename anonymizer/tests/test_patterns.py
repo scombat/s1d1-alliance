@@ -178,3 +178,18 @@ def test_long_adversarial_prompts_stay_fast():
         start = time.perf_counter()
         find_patterns(text[:65_536])
         assert time.perf_counter() - start < 3.0, text[:30]
+
+
+def test_pem_blocks_with_short_lines_and_truncated_ones():
+    begin, end = "-----BEGIN " + "PRIVATE" + " KEY-----", "-----END " + "PRIVATE" + " KEY-----"
+    block = f"{begin}\nMIIB\nab\nc=\n{end}"
+    assert anonymize(f"key:\n{block}\nthanks", NoDetector()) == "key:\n[SECRET]\nthanks"
+    truncated = "-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----\nb3Bl\nshort\nand then my question"
+    assert anonymize(f"here: {truncated}", NoDetector()) == "here: [SECRET]"
+
+
+def test_overlapping_findings_are_united_never_dropped():
+    # the email (found first) sits inside a longer quoted password (found later): the union goes, "!" included
+    assert anonymize('password = "x9jane@example.com!"', NoDetector()) == 'password = "[SECRET]"'
+    spans = find_patterns('password = "x9jane@example.com!"')
+    assert len(spans) == 1 and spans[0][2] == "[SECRET]"

@@ -1,8 +1,8 @@
 """Validated patterns for personal data and secrets, the complement of the model.
 
-`find_patterns(text)` returns non-overlapping spans `(start, end, marker)`. Every numeric pattern is checked
-(Luhn for cards, ISO 13616 mod 97 for IBANs, the key of the French NIR, the shape of a phone number) so that
-dates, prices, versions and counts are left alone. No I/O, no logging.
+`find_patterns(text)` returns non-overlapping spans `(start, end, marker)`, the union of all findings. Every numeric
+pattern is checked (Luhn for cards, ISO 13616 mod 97 for IBANs, the key of the French NIR, the shape of a phone
+number) so that dates, prices, versions and counts are left alone. No I/O, no logging.
 
 The patterns run on a normalised copy of the text in which some characters are replaced one for one (Arabic-Indic
 and full-width digits, non-breaking spaces, Unicode dashes): offsets are the same in both, so a span found in the
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import bisect
 import ipaddress
 import math
 import re
@@ -202,19 +201,24 @@ _PREFIXED = re.compile(
     r")"
 )
 _PEM_BEGIN = re.compile(r"-----BEGIN ([A-Z0-9 ]{1,64})-----")
-# Without an END line (a truncated paste), the block runs over the base64 chunks that follow it.
-_PEM_BODY = re.compile(r"(?:[ \t]*\r?\n?[ \t]*(?:[A-Za-z0-9+/=]{16,}|Proc-Type:[^\n]*|DEK-Info:[^\n]*))*")
 _AUTH_HEADER = re.compile(r"(?i)\b(bearer|basic)[ \t]+([A-Za-z0-9._~+/\-]{12,}=*)")
 
-_KEYWORDS = (
-    r"(?:pass(?:word|wd|phrase)?|pwd|mot de passe|mdp|passwort|kennwort|contrase(?:ñ|n)a|senha|пароль|密码|口令"
-    r"|パスワード|كلمة (?:المرور|السر)|secret(?:[_\- ]?key)?|api[_\- ]?key|access[_\- ]?(?:key|token)"
-    r"|auth[_\- ]?token|refresh[_\- ]?token|client[_\- ]?secret|private[_\- ]?key|token)"
+# The password family: a value given to one of these is a secret even when it is letters only.
+_PASSWORD_KEYWORDS = (
+    r"pass(?:word|wd|phrase)?|pwd|mot de passe|mdp|passwort|kennwort|contrase(?:ñ|n)a|senha|пароль|密码|口令"
+    r"|パスワード|كلمة (?:المرور|السر)"
 )
-_KW_QUOTED = re.compile(r"(?i)(?<![A-Za-z])" + _KEYWORDS + r"[\"']?[ \t]*[:=][ \t]*([\"'])([^\"'\r\n]{4,256})\1")
+_OTHER_KEYWORDS = (
+    r"secret(?:[_\- ]?key)?|api[_\- ]?key|access[_\- ]?(?:key|token)|auth[_\- ]?token|refresh[_\- ]?token"
+    r"|client[_\- ]?secret|private[_\- ]?key|token"
+)
+_KEYWORDS = rf"(?:(?P<pw>{_PASSWORD_KEYWORDS})|{_OTHER_KEYWORDS})"
+_KW_QUOTED = re.compile(
+    r"(?i)(?<![A-Za-z])" + _KEYWORDS + r"[\"']?[ \t]*[:=][ \t]*(?P<q>[\"'])(?P<v>[^\"'\r\n]{4,256})(?P=q)"
+)
 _KW_BARE = re.compile(
     r"(?i)(?<![A-Za-z])" + _KEYWORDS + r"[ \t]*(?:[:=：]|\bis\b|\best\b|\bist\b|\bes\b|是|为)[ \t]*"
-    r"([\x21\x23-\x26\x28-\x3b\x3d\x3f-\x7e]{6,128})"
+    r"(?P<v>(?:[\x21\x23-\x26\x28-\x3b\x3d\x3f-\x7e]|[^\W\x00-\x7f]){4,128})"  # printable ASCII or any letter
 )
 _PLACEHOLDER = re.compile(
     r"(?i)^(?:[<{$%\[*]|x{3,}|\.{3}|your[_\-]|my[_\-]|changeme$|example|placeholder"
@@ -230,6 +234,7 @@ _TOKEN_CHARS = "A-Za-z0-9+/=_\\-"
 _TOKEN = re.compile(rf"(?<![{_TOKEN_CHARS}])[{_TOKEN_CHARS}]{{{TOKEN_MIN},}}(?![{_TOKEN_CHARS}])")
 _CHUNK = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
 _HEX_ONLY = re.compile(r"[0-9A-Fa-f\-]+")
+_HEX_RUN = re.compile(r"(?:0x)?[0-9A-Fa-f]{32,}")
 _UUID_FULL = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 
 _VOWELS = frozenset("aeiouyAEIOUY")
@@ -274,8 +279,10 @@ def _is_random_token(token: str, depth: int) -> bool:
     """The entropy rule on a whole token: 32+ characters, letters and digits, >= 4.0 bits, not an identifier."""
     if not (any(ch.isalpha() for ch in token) and any(ch.isdigit() for ch in token)):
         return False
+    if _HEX_RUN.fullmatch(token):
+        return True  # 32+ hex digits mixing letters and digits: a key or a hash, either way not text
     if _UUID_FULL.fullmatch(token) or _HEX_ONLY.fullmatch(token):
-        return False  # identifiers (handled as [ID]) and hashes: at most 4 bits per character anyway
+        return False  # identifiers (handled as [ID]) and dashed hex
     if shannon_entropy(token) < ENTROPY_MIN or _wordlike(token):
         return False
     decoded = _decoded_text(token)
@@ -290,6 +297,8 @@ def _is_random_part(part: str) -> bool:
     alnum = [ch for ch in part if ch.isalnum()]
     letters = sum(ch.isalpha() for ch in alnum)
     digits = len(alnum) - letters
+    if _HEX_RUN.fullmatch(part) and letters and digits:
+        return True
     return (
         len(part) >= 20
         and any(ch.isupper() for ch in part)
@@ -340,30 +349,37 @@ def _secrets_prefixed(t: str, depth: int) -> Iterator[Span]:
         elif mixed:
             yield m.start(2), m.end(2), SECRET
     for m in _PEM_BEGIN.finditer(t):
+        # through the END line, whatever the length of the lines in between; without one (a truncated paste), to the
+        # end of the text: what follows a key header is the key
         end_marker = f"-----END {m.group(1)}-----"
         found = t.find(end_marker, m.end())
-        end = found + len(end_marker) if found >= 0 else _PEM_BODY.match(t, m.end()).end()
-        yield m.start(), end, SECRET
+        yield m.start(), (found + len(end_marker) if found >= 0 else len(t)), SECRET
+        if found < 0:
+            break
 
 
-def _bare_value_ok(value: str) -> bool:
+def _bare_value_ok(value: str, password: bool) -> bool:
     if _PLACEHOLDER.match(value) or _CODE_REFERENCE.match(value) or _PATH.match(value):
         return False  # a placeholder, a code reference (settings.API_KEY) or a file path (private key: ~/.ssh/id_rsa)
+    if password and len(value) >= 4:
+        return True  # "mot de passe : soleil", "password is hunter": letters only is still a password
     has_letter = any(c.isalpha() for c in value)
     has_digit = any(c.isdigit() for c in value)
     has_symbol = any(c in "!@#$%^&*+?~|" for c in value[1:])
-    return (has_letter and has_digit) or has_symbol
+    return len(value) >= 6 and ((has_letter and has_digit) or has_symbol)
 
 
 def _secrets_by_keyword(t: str, depth: int) -> Iterator[Span]:
     for m in _KW_QUOTED.finditer(t):
-        value = m.group(2)
+        value = m.group("v")
         if not _PLACEHOLDER.match(value) and value.strip():
-            yield m.start(2), m.end(2), SECRET
+            yield m.start("v"), m.end("v"), SECRET
     for m in _KW_BARE.finditer(t):
-        value = m.group(1).rstrip(".,;:)]}")
-        if len(value) >= 6 and _bare_value_ok(value):
-            yield m.start(1), m.start(1) + len(value), SECRET
+        value = m.group("v").rstrip(".,;:)]}")
+        # "pass" alone is too common a word ("pass: the next level") to vouch for a letters-only value
+        password = m.group("pw") is not None and m.group("pw").lower() != "pass"
+        if _bare_value_ok(value, password):
+            yield m.start("v"), m.start("v") + len(value), SECRET
 
 
 def _secrets_by_entropy(t: str, depth: int) -> Iterator[Span]:
@@ -376,12 +392,14 @@ def _secrets_by_entropy(t: str, depth: int) -> Iterator[Span]:
 # --- URLs, emails, identifiers ---------------------------------------------------------------------------------
 
 _URL_USERINFO = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{1,20}://([^\s/?#@:]+:[^\s/?#]*)@")
+# Any Unicode letter or digit in the local part and the domain (internationalised addresses: иван@почта.рф).
 _EMAIL = re.compile(
-    r"(?<![A-Za-z0-9._%+\-])([A-Za-z0-9._%+\-]+)@((?:[\w\-]+\.)+"
+    r"(?<![\w.%+\-])([\w.%+\-]+)@((?:[\w\-]+\.)+"
     # the TLD; a capital right after a lower-case TLD is the next word, glued (name@gmail.comEduardo)
     r"(?:[a-z]{2,24}(?![a-z0-9\-])|[A-Z][a-z]{1,23}(?![a-z0-9\-])|[A-Z]{2,24}(?![A-Za-z0-9\-])"
-    r"|xn--[A-Za-z0-9\-]{2,59}(?![A-Za-z0-9\-])))"
+    r"|xn--[A-Za-z0-9\-]{2,59}(?![A-Za-z0-9\-])|[^\W\d_\x00-\x7f]{2,24}(?![\w\-])))"
 )
+_IN_URL_AUTHORITY = re.compile(r"(?i)[a-z][a-z0-9+.\-]{1,20}://[^\s/?#@]*$")
 _RETINA = re.compile(r"[0-9]+x\.", re.I)
 _UUID = re.compile(
     r"(?<![0-9A-Za-z])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Za-z])"
@@ -400,6 +418,8 @@ def _emails(t: str, depth: int) -> Iterator[Span]:
             continue
         if local == "git" and t.startswith(":", m.end()):  # git@github.com:owner/repo.git
             continue
+        if _IN_URL_AUTHORITY.search(t, max(0, m.start() - 300), m.start()):
+            continue  # the "password@host" of scheme://user:password@host: [URL_CREDENTIALS] and the host
         yield m.start(), m.end(), EMAIL
 
 
@@ -588,6 +608,8 @@ def _phone_shape(parts: list[str], seps: list[str], plus: bool) -> bool:
         return sizes in ([11], [3, 4, 4]) and kinds <= {" ", "-"}
     if n == 11 and digits[0] == "8" and digits[1] in "3456789":  # Russian national, 89123456789
         return sizes in ([11], [1, 3, 3, 2, 2], [1, 3, 3, 4]) and kinds <= {" ", "-"}
+    if n == 10 and digits[0] == "3" and kinds <= {" "} and sizes in ([3, 3, 4], [3, 7], [3, 4, 3]):
+        return True  # Italian mobile, 333 123 4567
     if n == 10 and digits[0] in "23456789":  # US 415-555-0132, 415.555.0132 (never spaces alone: too common)
         return sizes == [3, 3, 4] and kinds in ({"-"}, {"."})
     if n == 11 and digits[0] == "1":  # 1-415-555-0132
@@ -628,7 +650,7 @@ def _phones(t: str, depth: int) -> Iterator[Span]:
 
 # --- all together -----------------------------------------------------------------------------------------------
 
-# In priority order: when two spans overlap, the one from the earlier detector is kept.
+# Every detector runs; overlapping findings are merged (union, longest marker).
 _DETECTORS: list[Callable[[str, int], Iterator[Span]]] = [
     _secrets_prefixed,
     _url_credentials,
@@ -645,21 +667,35 @@ _DETECTORS: list[Callable[[str, int], Iterator[Span]]] = [
 ]
 
 
+def merge_spans(spans: list[Span], length: int) -> list[Span]:
+    """The union of the spans: overlapping spans become one, whose marker is that of the longest.
+
+    Spans are clamped to the text; empty ones are dropped. Spans that only touch stay separate. Among spans of the
+    same length, the first one (by start) gives the marker.
+    """
+    clamped = sorted((max(0, s), min(length, e), m) for s, e, m in spans if min(length, e) > max(0, s))
+    merged: list[Span] = []
+    longest = 0
+    for start, end, marker in clamped:
+        if merged and start < merged[-1][1]:
+            s0, e0, m0 = merged[-1]
+            if end - start > longest:
+                longest, m0 = end - start, marker
+            merged[-1] = (s0, max(e0, end), m0)
+        else:
+            merged.append((start, end, marker))
+            longest = end - start
+    return merged
+
+
 def _find(t: str, depth: int) -> list[Span]:
-    taken: list[Span] = []  # sorted by start, never overlapping
-    starts: list[int] = []
-    for detector in _DETECTORS:
-        for start, end, marker in detector(t, depth):
-            if end <= start:
-                continue
-            k = bisect.bisect_right(starts, start)
-            if (k > 0 and taken[k - 1][1] > start) or (k < len(taken) and taken[k][0] < end):
-                continue  # overlaps a span of an earlier detector
-            starts.insert(k, start)
-            taken.insert(k, (start, end, marker))
-    return taken
+    spans = [span for detector in _DETECTORS for span in detector(t, depth)]
+    return merge_spans(spans, len(t))
 
 
 def find_patterns(text: str) -> list[Span]:
-    """Non-overlapping spans of emails, phones, IBANs, cards, IPs, URL credentials, identifiers and secrets."""
+    """Spans of emails, phones, IBANs, cards, IPs, URL credentials, identifiers and secrets.
+
+    Overlapping findings are merged into one span (their union), marked by the longest: a span is never dropped.
+    """
     return _find(normalise(text), 0)

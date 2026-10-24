@@ -1,7 +1,7 @@
-"""The model side: the Detector protocol and the GLiNER adapter.
+"""The model side: the Detector protocol, the GLiNER adapter and the ensemble of two GLiNER models.
 
-`gliner` (and with it `torch`) is imported inside `GlinerDetector` only, so that the patterns, the cleaning and the
-handler can be imported and tested without the model.
+`gliner` (and with it `torch`, both in the optional `model` extra) is imported inside `GlinerDetector` only, so that
+the patterns, the cleaning and the handler can be imported and tested without the model.
 """
 
 from __future__ import annotations
@@ -12,7 +12,29 @@ from typing import Protocol, runtime_checkable
 
 from anonymizer.patterns import ADDRESS, EMAIL, ID, PERSON, PHONE, Span
 
-__all__ = ["LABELS", "Detector", "GlinerDetector", "Span", "chunk_words", "split_words"]
+__all__ = [
+    "ENCODER_PINS",
+    "LABELS",
+    "MODELS",
+    "Detector",
+    "EnsembleDetector",
+    "GlinerDetector",
+    "Span",
+    "chunk_words",
+    "gliner_ensemble",
+    "split_words",
+]
+
+# The ensemble: directory name -> (Hub repository, pinned commit). Both Apache-2.0. knowledgator's has the best
+# English F1; urchade's has a multilingual encoder (mDeBERTa-v3) and finds the Arabic, Chinese, Hebrew, Korean and
+# Persian names that the first misses. Their spans are united.
+MODELS: dict[str, tuple[str, str]] = {
+    "knowledgator": ("knowledgator/gliner-pii-base-v1.0", "61726e0ad791dcab3e29339bbec3ad42ded65641"),
+    "urchade": ("urchade/gliner_multi_pii-v1", "1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d"),
+}
+# urchade's repository carries no tokenizer: GLiNER takes it from the encoder's repository (MIT), checked at this commit
+# by scripts/fetch_models.py, which saves it into the model directory.
+ENCODER_PINS: dict[str, str] = {"microsoft/mdeberta-v3-base": "a0484667b22365f84929a935b5e50a51f71f159d"}
 
 
 @runtime_checkable
@@ -31,6 +53,34 @@ LABELS: dict[str, str] = {
     "social security number": ID,
     "tax id": ID,
 }
+
+# Words the models tag as persons at 0.5 that name no one: pronouns and the roles of a conversation. urchade's model
+# tags "I", "you", "eu", "你" as persons in about a third of ordinary prompts; dropping these spans loses no name.
+NOT_A_PERSON = frozenset(
+    """
+    i me my mine myself you your yours yourself he him his she her hers we us our they them their it someone
+    somebody anyone user users username assistant bot chatbot ai human customer client friend
+    je moi tu toi il elle nous vous ils elles on lui eux
+    yo mí mi tú ti usted él ella nosotros vosotros ellos ellas
+    eu você vocês ele ela nós eles elas
+    io me te lui lei noi voi loro
+    ich mich mir du dich dir er sie wir ihr
+    ben sen o biz siz onlar ja ty on ona my wy oni
+    εγώ εσύ αυτός αυτή εμείς εσείς
+    אני אתה את הוא היא אנחנו
+    أنا أنت أنتِ هو هي نحن هم
+    من تو او ما شما
+    我 你 您 他 她 我们 你们 他们 她们 用户 助手
+    저 나 너 당신 그 그녀 우리 사용자
+    """.split()
+)
+
+
+def not_a_person(span: str) -> bool:
+    """A model "person" span that names no one: a pronoun, a role, a single Latin letter or a placeholder."""
+    word = span.strip(" \t\n.,;:!?\"'()[]").lower()
+    return not word or word in NOT_A_PERSON or (len(word) == 1 and word.isascii())
+
 
 # Han, kana and the CJK compatibility block are written without spaces: each character is its own word, so that the
 # model (whose word splitter cuts on spaces and punctuation) can tag a name inside a run of characters.
@@ -77,7 +127,8 @@ class GlinerDetector:
     ) -> None:
         from gliner import GLiNER  # noqa: PLC0415 - heavy import, kept out of the fast tests
 
-        self.model = GLiNER.from_pretrained(model_dir)
+        # a local directory only (the image copies the models in): never a download at run time
+        self.model = GLiNER.from_pretrained(model_dir, local_files_only=True)
         self.model.eval()
         self.threshold = threshold
         self.max_tokens = max_tokens
@@ -119,5 +170,25 @@ class GlinerDetector:
                     continue
                 first = max(0, bisect.bisect_right(starts, int(entity["start"])) - 1)
                 last = max(first, bisect.bisect_left(starts, int(entity["end"])) - 1)
-                found.append((window[first][0], window[last][1], marker))
+                start, end = window[first][0], window[last][1]
+                if marker == PERSON and not_a_person(text[start:end]):
+                    continue
+                found.append((start, end, marker))
         return found
+
+
+class EnsembleDetector:
+    """The union of the spans of several detectors (overlaps are merged later, by anonymize)."""
+
+    def __init__(self, detectors: list[Detector]) -> None:
+        if not detectors:
+            raise ValueError("an ensemble needs at least one detector")
+        self.detectors = list(detectors)
+
+    def spans(self, text: str) -> list[Span]:
+        return [span for detector in self.detectors for span in detector.spans(text)]
+
+
+def gliner_ensemble(model_dirs: list[str], threshold: float = 0.5) -> EnsembleDetector:
+    """One GlinerDetector per directory, at the same threshold."""
+    return EnsembleDetector([GlinerDetector(model_dir, threshold) for model_dir in model_dirs])

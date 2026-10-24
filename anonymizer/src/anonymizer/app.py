@@ -4,7 +4,9 @@ Eventarc delivers the Cloud Storage "object finalized" event as a CloudEvent in 
 body is the storage object (at least `bucket` and `name`) and whose `ce-type` header names the event. For an object
 `raw/YYYY/MM/DD/<uuid>.ndjson`, the handler reads it, cleans each line and writes
 `clean/YYYY/MM/DD/<uuid>.ndjson` to R2, then answers 204. A rewrite replaces the object, so an event delivered
-twice gives one clean object. Any other object is acknowledged (204) and left alone. A failure answers 500, and
+twice gives one clean object. Only objects of the bucket named by RAW_BUCKET are read. Any other object or bucket,
+and any event that can never succeed (malformed, too large, another type), is acknowledged (204) and left alone,
+since Eventarc retries every other answer. A failure that may pass (storage, a broken model) answers 500, and
 Eventarc delivers the event again later.
 
 The log lines carry object names, counts and error class names, never a prompt, a line or an error message.
@@ -21,7 +23,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from anonymizer.clean import clean_line, dumps_line
+from anonymizer.clean import DROPPED, UNCOVERED_SCRIPT, clean_line_reason, dumps_line
 from anonymizer.detector import Detector
 
 ReadObject = Callable[[str, str], bytes]
@@ -79,12 +81,15 @@ def r2_writer() -> WriteObject:
     return write
 
 
-def gliner_detector() -> Detector:
-    from anonymizer.detector import GlinerDetector  # noqa: PLC0415
+DEFAULT_MODEL_DIRS = "/model/knowledgator,/model/urchade"
 
-    return GlinerDetector(
-        os.environ.get("GLINER_MODEL_DIR", "/model"), float(os.environ.get("GLINER_THRESHOLD", "0.5"))
-    )
+
+def gliner_detector() -> Detector:
+    """The ensemble of the models in GLINER_MODEL_DIRS (comma-separated), at GLINER_THRESHOLD."""
+    from anonymizer.detector import gliner_ensemble  # noqa: PLC0415
+
+    dirs = [d.strip() for d in os.environ.get("GLINER_MODEL_DIRS", DEFAULT_MODEL_DIRS).split(",") if d.strip()]
+    return gliner_ensemble(dirs, float(os.environ.get("GLINER_THRESHOLD", "0.5")))
 
 
 class _Lazy:
@@ -108,24 +113,38 @@ class _Lazy:
 # --- the work ---------------------------------------------------------------------------------------------------
 
 
-def process_object(raw: bytes, detector: Detector) -> tuple[bytes, int, int]:
-    """The clean NDJSON of a raw object, with the counts of kept and dropped lines."""
+class AllLinesFailed(RuntimeError):
+    """Every line of an object raised: the detector itself is broken, so the event must be retried."""
+
+
+def process_object(raw: bytes, detector: Detector) -> tuple[bytes, dict[str, int]]:
+    """The clean NDJSON of a raw object, with its counts: kept, dropped, dropped_uncovered_script, failed.
+
+    A line that raises is dropped and counted as failed, so that one bad line cannot make the object fail forever;
+    when every line raises, the object fails (AllLinesFailed) and Eventarc retries it.
+    """
     out: list[str] = []
-    dropped = 0
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
+    counts = {"kept": 0, DROPPED: 0, UNCOVERED_SCRIPT: 0, "failed": 0}
+    lines = [line for line in raw.decode("utf-8", errors="replace").splitlines() if line.strip()]
+    for line in lines:
         try:
             parsed = json.loads(line)
         except ValueError:
-            dropped += 1
+            counts[DROPPED] += 1
             continue
-        cleaned = clean_line(parsed, detector)
+        try:
+            cleaned, reason = clean_line_reason(parsed, detector)
+        except Exception:  # noqa: BLE001 - counted, never logged with its message (it may quote the prompt)
+            counts["failed"] += 1
+            continue
         if cleaned is None:
-            dropped += 1
+            counts[reason or DROPPED] += 1
             continue
         out.append(dumps_line(cleaned) + "\n")
-    return "".join(out).encode("utf-8"), len(out), dropped
+        counts["kept"] += 1
+    if lines and counts["failed"] == len(lines):
+        raise AllLinesFailed
+    return "".join(out).encode("utf-8"), counts
 
 
 # --- ASGI -------------------------------------------------------------------------------------------------------
@@ -163,18 +182,23 @@ def create_app(
     read_object: ReadObject | None = None,
     write_object: WriteObject | None = None,
     detector_factory: Callable[[], Detector] | None = None,
+    raw_bucket: str | None = None,
 ) -> Callable[[dict, Receive, Send], Awaitable[None]]:
-    """The ASGI application. Each dependency defaults to the real adapter, built on first use."""
+    """The ASGI application. Each dependency defaults to the real adapter, built on first use.
+
+    `raw_bucket` (default: the RAW_BUCKET variable, required) is the only bucket whose objects are read: an event
+    naming another bucket is acknowledged and ignored, so the service cannot be made to copy another bucket.
+    """
     reader = _Lazy(lambda: read_object or gcs_reader())
     writer = _Lazy(lambda: write_object or r2_writer())
     detector = _Lazy(detector_factory or gliner_detector)
 
     def handle_object(bucket: str, name: str, key: str) -> None:
         raw = reader.get()(bucket, name)
-        body, kept, dropped = process_object(raw, detector.get())
-        if kept:
+        body, counts = process_object(raw, detector.get())
+        if counts["kept"]:
             writer.get()(key, body)
-        log("INFO", "cleaned", object=name, clean=key if kept else None, kept=kept, dropped=dropped)
+        log("INFO", "cleaned", object=name, clean=key if counts["kept"] else None, **counts)
 
     async def app(scope: dict, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -194,13 +218,15 @@ def create_app(
             await _respond(send, 405)
             return
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        # Eventarc retries any answer that is not 2xx: an event that can never succeed is acknowledged (204) with a
+        # warning that quotes nothing from it.
         body = await _read_body(receive)
         if body is None:
-            await _respond(send, 413)
+            log("WARNING", "event body too large")
+            await _respond(send, 204)
             return
-        ce_type = headers.get("ce-type")
-        if ce_type is not None and ce_type != FINALIZED:
-            log("INFO", "ignored event type", type=ce_type)
+        if headers.get("ce-type", FINALIZED) != FINALIZED:
+            log("INFO", "ignored event type")
             await _respond(send, 204)
             return
         try:
@@ -213,12 +239,21 @@ def create_app(
             or not isinstance(event.get("name"), str)
         ):
             log("WARNING", "not a storage event")
-            await _respond(send, 400)
+            await _respond(send, 204)
             return
         bucket, name = event["bucket"], event["name"]
         key = clean_key(name)
         if key is None:
-            log("INFO", "ignored object", object=name)
+            log("INFO", "ignored object")
+            await _respond(send, 204)
+            return
+        expected = raw_bucket if raw_bucket is not None else os.environ.get("RAW_BUCKET")
+        if not expected:
+            log("ERROR", "RAW_BUCKET is not set")  # a configuration error: 500, retried until it is fixed
+            await _respond(send, 500)
+            return
+        if bucket != expected:
+            log("WARNING", "event from another bucket")
             await _respond(send, 204)
             return
         try:

@@ -39,9 +39,11 @@ def _raw_object(lines):
     return ("\n".join(json.dumps(line) for line in lines) + "\n").encode()
 
 
-def _app(store, detector=None):
+def _app(store, detector=None, raw_bucket="s1d1-raw"):
     detector = detector or NoDetector()
-    return create_app(read_object=store.read, write_object=store.write, detector_factory=lambda: detector)
+    return create_app(
+        read_object=store.read, write_object=store.write, detector_factory=lambda: detector, raw_bucket=raw_bucket
+    )
 
 
 def _call(app, body, method="POST", path="/", headers=None):
@@ -138,7 +140,7 @@ def test_the_detector_is_built_once_and_lazily():
         return NoDetector()
 
     store = FakeStore({("s1d1-raw", RAW): _raw_object(raw_valid_lines())})
-    app = create_app(read_object=store.read, write_object=store.write, detector_factory=factory)
+    app = create_app(read_object=store.read, write_object=store.write, detector_factory=factory, raw_bucket="s1d1-raw")
     assert _call(app, _event("other/a"))[0] == 204
     assert built == []
     _call(app, _event(RAW))
@@ -151,12 +153,59 @@ def test_requests_that_are_not_events():
     app = _app(store)
     assert _call(app, b"", method="GET")[0] == 405
     assert _call(app, _event(RAW), path="/other")[0] == 404
-    assert _call(app, b"{not json")[0] == 400
-    assert _call(app, b"[1, 2]")[0] == 400
-    assert _call(app, {"bucket": "b"})[0] == 400
+    assert store.reads == []
+
+
+def test_an_event_that_can_never_succeed_is_acknowledged(capsys):
+    # Eventarc retries any answer that is not 2xx: these would be retried forever
+    store = FakeStore()
+    app = _app(store)
+    for body in (b"{not json", b"[1, 2]", json.dumps({"bucket": "b"}).encode(), b"x" * 1_048_577):
+        assert _call(app, body)[0] == 204
     other_type = {"ce-type": "google.cloud.storage.object.v1.deleted"}
     assert _call(app, _event(RAW), headers=other_type)[0] == 204
-    assert store.reads == []
+    assert store.reads == [] and store.writes == {}
+    assert "not json" not in capsys.readouterr().err
+
+
+def test_only_the_raw_bucket_is_read(capsys, monkeypatch):
+    store = FakeStore({("other-bucket", RAW): _raw_object(raw_valid_lines())})
+    assert _call(_app(store), _event(RAW, bucket="other-bucket"))[0] == 204
+    assert store.reads == [] and store.writes == {}
+    assert "other-bucket" not in capsys.readouterr().err
+    # the bucket comes from RAW_BUCKET by default, and without it nothing is read (500: a configuration error)
+    store = FakeStore({("s1d1-raw", RAW): _raw_object(raw_valid_lines())})
+    app = create_app(read_object=store.read, write_object=store.write, detector_factory=NoDetector)
+    monkeypatch.delenv("RAW_BUCKET", raising=False)
+    assert _call(app, _event(RAW))[0] == 500
+    assert _call(app, _event("other/a"))[0] == 204  # an object outside raw/ needs no configuration
+    monkeypatch.setenv("RAW_BUCKET", "s1d1-raw")
+    assert _call(app, _event(RAW))[0] == 204
+    assert list(store.writes) == [CLEAN]
+
+
+def test_one_failing_line_is_dropped_not_the_object(capsys):
+    class FailsOnOne:
+        def spans(self, text):
+            if "meeting" in text:
+                raise ValueError(f"model failed on {text}")
+            return []
+
+    store = FakeStore({("s1d1-raw", RAW): _raw_object(raw_valid_lines())})
+    assert _call(_app(store, FailsOnOne()), _event(RAW))[0] == 204
+    assert len(store.writes[CLEAN].decode().splitlines()) == 2
+    logs = capsys.readouterr().err
+    assert '"failed": 1' in logs and '"kept": 2' in logs and "meeting" not in logs
+
+
+def test_uncovered_scripts_are_dropped_and_counted(capsys):
+    lines = raw_valid_lines()
+    lines[1] = {**lines[1], "prompt": "Меня зовут Ольга Смирнова, я живу в Казани."}
+    store = FakeStore({("s1d1-raw", RAW): _raw_object(lines)})
+    assert _call(_app(store), _event(RAW))[0] == 204
+    assert len(store.writes[CLEAN].decode().splitlines()) == 2
+    logs = capsys.readouterr().err
+    assert '"dropped_uncovered_script": 1' in logs and "Ольга" not in logs
 
 
 def test_lifespan_is_answered():

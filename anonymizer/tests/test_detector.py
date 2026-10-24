@@ -9,11 +9,18 @@ import time
 import pytest
 from fakes import FIXTURES
 
-from anonymizer.clean import anonymize
-from anonymizer.detector import LABELS, Detector, GlinerDetector, chunk_words, split_words
-
-MODEL_ID = "knowledgator/gliner-pii-base-v1.0"
-MODEL_REVISION = "61726e0ad791dcab3e29339bbec3ad42ded65641"  # the commit the slow test was run against
+from anonymizer.clean import anonymize, clean_line_reason
+from anonymizer.coverage import COVERED_SCRIPTS, letter_scripts
+from anonymizer.detector import (
+    LABELS,
+    MODELS,
+    Detector,
+    EnsembleDetector,
+    GlinerDetector,
+    chunk_words,
+    gliner_ensemble,
+    split_words,
+)
 
 
 class FakeModel:
@@ -58,6 +65,21 @@ def test_labels_and_protocol():
     assert isinstance(_detector(FakeModel([])), Detector)
 
 
+def test_ensemble_unites_the_spans_of_its_members():
+    a = _detector(FakeModel(["Ana"]))
+    b = _detector(FakeModel(["Lima"]))
+    text = "Ana Lima"
+    assert sorted(EnsembleDetector([a, b]).spans(text)) == [(0, 3, "[PERSON]"), (4, 8, "[PERSON]")]
+    assert anonymize(text, EnsembleDetector([a, b])) == "[PERSON] [PERSON]"
+    with pytest.raises(ValueError):
+        EnsembleDetector([])
+
+
+def test_models_are_pinned_to_commits():
+    assert set(MODELS) == {"knowledgator", "urchade"}
+    assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for _, revision in MODELS.values())
+
+
 def test_split_words_matches_gliner_and_cuts_cjk():
     text = "Hello, Jean-Pierre! 我叫王伟。"
     assert [text[s:e] for s, e in split_words(text)] == ["Hello", ",", "Jean-Pierre", "!", "我", "叫", "王", "伟", "。"]
@@ -90,64 +112,104 @@ def test_long_text_is_windowed_and_a_name_on_a_boundary_is_found():
     assert anonymize(text, detector).count("[PERSON]") == 2
 
 
-# --- the real model ---------------------------------------------------------------------------------------------
+# --- the real models -------------------------------------------------------------------------------------------
 
-NAMES = {
-    "en.txt": ["Margaret", "Thornbury"],
-    "fr.txt": ["Élodie", "Marchand"],
-    "de.txt": ["Jürgen", "Wohlfahrt"],
-    "es.txt": ["Lucía", "Fernández", "Ortega"],
-    "zh.txt": ["王晓明"],
-    "ar.txt": ["ليلى", "الحسيني"],
-    "ru.txt": ["Ольга", "Смирнова"],
+# Per fixture: the names and a distinctive fragment of the address, none of which may survive.
+EXPECTED = {
+    "en.txt": ["Margaret", "Thornbury", "Willow Lane"],
+    "fr.txt": ["Élodie", "Marchand", "Tanneurs"],
+    "de.txt": ["Jürgen", "Wohlfahrt", "Lindenstraße"],
+    "es.txt": ["Lucía", "Fernández", "Ortega", "calle Mayor"],
+    "it.txt": ["Giulia", "Bianchi", "Garibaldi"],
+    "pt.txt": ["João", "Pereira", "Rua Augusta"],
+    "pl.txt": ["Katarzyna", "Nowak", "Marszałkowskiej"],
+    "tr.txt": ["Mehmet", "Yılmaz", "İstiklal"],
+    "vi.txt": ["Nguyễn Văn An", "Lý Thường Kiệt"],
+    "el.txt": ["Γιώργο", "Παπαδόπουλο", "Ερμού"],
+    "he.txt": ["דוד", "כהן", "הרצל"],
+    "ar.txt": ["ليلى", "الحسيني", "الملك فهد"],
+    "fa.txt": ["سارا", "محمدی", "ولیعصر"],
+    "zh.txt": ["王晓明", "建国路"],
+    "ko.txt": ["김민준", "테헤란로"],
+    "ru.txt": ["Ольга", "Смирнова", "Ленина"],
+    "uk.txt": ["Олена", "Коваленко", "Хрещатик"],
+    "ja.txt": ["山田花子", "西新宿"],
+    "hi.txt": ["राहुल", "शर्मा", "एमजी रोड"],
+    "th.txt": ["สมชาย", "สุขุมวิท"],
 }
+
+
+def _fixture(name):
+    return (FIXTURES / "pii" / name).read_text(encoding="utf-8").strip()
+
+
+def _script(text):
+    counts = letter_scripts(text)
+    return max(counts, key=counts.get)
 
 
 @pytest.fixture(scope="module")
-def real_detector():
-    model_dir = os.environ.get("GLINER_MODEL_DIR")
-    if not model_dir:
+def ensemble():
+    dirs = [d for d in os.environ.get("GLINER_MODEL_DIRS", "").split(",") if d]
+    if not dirs:
         from huggingface_hub import snapshot_download
 
-        model_dir = snapshot_download(MODEL_ID, revision=MODEL_REVISION)
-    return GlinerDetector(model_dir, threshold=float(os.environ.get("GLINER_THRESHOLD", "0.5")))
+        dirs = [snapshot_download(repo, revision=revision) for repo, revision in MODELS.values()]
+    return gliner_ensemble(dirs, threshold=float(os.environ.get("GLINER_THRESHOLD", "0.5")))
 
 
-# Known misses at the pinned revision and threshold 0.5: the model's encoder is the English DeBERTa-v3 (the model card
-# says "language: en"). On these sentences it scores the Chinese name below 0.35 and the Arabic name at 0.44, so they
-# survive. Strict: the day a model or threshold change finds them, the test turns red and this list must go.
-KNOWN_MISSES = {
-    "zh.txt": "Chinese names score below the threshold with this English-backbone model",
-    "ar.txt": "Arabic names score below the threshold with this English-backbone model",
-}
+def test_every_fixture_has_its_expectations_and_every_covered_script_a_fixture():
+    files = {f.name for f in (FIXTURES / "pii").glob("*.txt")}
+    assert files == set(EXPECTED)
+    assert {_script(_fixture(n)) for n in files} >= COVERED_SCRIPTS
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param(n, marks=pytest.mark.xfail(reason=KNOWN_MISSES[n], strict=True)) if n in KNOWN_MISSES else n
-        for n in sorted(NAMES)
-    ],
-)
-def test_no_fixture_name_survives_the_real_model(real_detector, name):
-    text = (FIXTURES / "pii" / name).read_text(encoding="utf-8").strip()
-    out = anonymize(text, real_detector)
-    assert [n for n in NAMES[name] if n in out] == [], out
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_covered_scripts_lose_every_name_and_address(ensemble, name):
+    text = _fixture(name)
+    line = {"id": "x", "prompt": text, "source": "capture:direct", "terms_version": "v1"}
+    cleaned, reason = clean_line_reason(line, ensemble)
+    if _script(text) in COVERED_SCRIPTS:
+        assert reason is None
+        assert [n for n in EXPECTED[name] if n in cleaned["prompt"]] == [], cleaned["prompt"]
+        assert "[PHONE]" in cleaned["prompt"]
+    else:
+        assert (cleaned, reason) == (None, "dropped_uncovered_script")
+
+
+def _uncovered_scripts():
+    return sorted({_script(_fixture(n)) for n in EXPECTED} - COVERED_SCRIPTS)
 
 
 @pytest.mark.slow
-def test_mean_seconds_per_prompt(real_detector, capsys):
-    files = sorted((FIXTURES / "pii").glob("*.txt"))
-    assert {f.name for f in files} == set(NAMES)
-    real_detector.spans("warm up")
+@pytest.mark.parametrize("script", _uncovered_scripts())
+def test_uncovered_scripts_are_really_missed(ensemble, script):
+    # Why the script is dropped: in at least one of its fixtures the ensemble leaves a name or an address. The day it
+    # leaves none, this test fails: add the script to COVERED_SCRIPTS and this case goes.
+    survivors = {}
+    for name in sorted(n for n in EXPECTED if _script(_fixture(n)) == script):
+        out = anonymize(_fixture(name), ensemble)
+        survivors[name] = [n for n in EXPECTED[name] if n in out]
+    assert any(survivors.values()), survivors
+
+
+@pytest.mark.slow
+def test_mean_seconds_per_prompt(ensemble, capsys):
+    ensemble.spans("warm up")
     durations = []
-    for path in files:
-        text = path.read_text(encoding="utf-8").strip()
+    for name in sorted(EXPECTED):
+        text = _fixture(name)
         start = time.perf_counter()
-        anonymize(text, real_detector)
+        anonymize(text, ensemble)
         durations.append(time.perf_counter() - start)
     mean = sum(durations) / len(durations)
     with capsys.disabled():
-        print(f"\nGLiNER {MODEL_ID}@{MODEL_REVISION[:7]}: {mean:.3f} s per prompt (mean of {len(files)})")
+        print(f"\nensemble {', '.join(MODELS)}: {mean:.3f} s per prompt (mean of {len(durations)} fixtures)")
     assert mean < 2.0
+
+
+def test_pronouns_and_roles_are_not_persons():
+    text = "I told you that Ana Lima and 你 met the user."
+    detector = _detector(FakeModel(["I", "you", "Ana Lima", "你", "user"]))
+    assert sorted(text[s:e] for s, e, _ in detector.spans(text)) == ["Ana Lima"]

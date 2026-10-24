@@ -725,11 +725,15 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
-    { name = "gliner" },
     { name = "google-cloud-storage" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+model = [
+    { name = "gliner" },
     { name = "torch", version = "2.14.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.14.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
-    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -740,11 +744,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43,<2" },
-    { name = "gliner", specifier = ">=0.2.29,<0.3" },
+    { name = "gliner", marker = "extra == 'model'", specifier = ">=0.2.29,<0.3" },
     { name = "google-cloud-storage", specifier = ">=3.17,<4" },
-    { name = "torch", specifier = ">=2.14,<3", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torch", marker = "extra == 'model'", specifier = ">=2.14,<3", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", specifier = ">=0.54,<1" },
 ]
+provides-extras = ["model"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1,<10" }]

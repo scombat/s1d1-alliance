@@ -5,10 +5,15 @@ description = "Turns the raw s1d1 captures into the anonymised clean corpus (GLi
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "gliner>=0.2.29,<0.3",
     "google-cloud-storage>=3.17,<4",
     "boto3>=1.43,<2",
     "uvicorn>=0.54,<1",
+]
+
+[project.optional-dependencies]
+# The models: installed by the image (Task 7), the slow tests and scripts/fetch_models.py, never by CI's fast tests.
+model = [
+    "gliner>=0.2.29,<0.3",
     "torch>=2.14,<3",
 ]
 

@@ -69,7 +69,10 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.11.26"
+          enable-cache: true
+          cache-dependency-glob: anonymizer/uv.lock
 
+      # The fast tests need neither the models nor torch: the `model` extra is not installed here.
       - name: Run the fast tests (slow marker excluded)
         if: hashFiles('anonymizer/**') != ''
         working-directory: anonymizer
