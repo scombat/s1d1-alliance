@@ -1,0 +1,80 @@
+# A s1d1 community node: tantive (the router) behind a Cloudflare Tunnel. No port is published: the only traffic that
+# reaches tantive is what `cloudflared` forwards (ingress `http://tantive:8788`, set on the tunnel), and the only
+# traffic that leaves is the tunnel and the capture sender (https://s1d1.qoo.gy/ingest).
+#
+# Generic: the same file runs on the Oracle A1 instance and on a homelab. The images (TANTIVE_IMAGE,
+# CLOUDFLARED_IMAGE) are written into .env by update.sh from desired.env; the secrets (TUNNEL_TOKEN,
+# COMMUNITY_TOKEN) are put there by cloud-init or by hand. See example.env.
+name: s1d1
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # The capture folder is a named volume, created root-owned; tantive runs as uid 10001 and needs to write in it.
+  # This one-shot step uses the tantive image itself (no extra image to pin) and only gets the CHOWN capability.
+  capture-init:
+    image: ${TANTIVE_IMAGE:?set TANTIVE_IMAGE (update.sh writes it)}
+    user: "0:0"
+    entrypoint: ["chown", "10001:10001", "/capture"]
+    volumes:
+      - capture:/capture
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    logging: *logging
+
+  tantive:
+    image: ${TANTIVE_IMAGE:?set TANTIVE_IMAGE (update.sh writes it)}
+    restart: unless-stopped
+    depends_on:
+      capture-init:
+        condition: service_completed_successfully
+    environment:
+      S1D1_FORMATS: systemone,decisions,chat,classify,predict
+      S1D1_ROOT_PATH: /api
+      S1D1_CAPTURE_DIR: /capture
+      S1D1_CAPTURE_RETENTION_DAYS: "2"
+      S1D1_CAPTURE_SEND: "1"
+      S1D1_CAPTURE_TOKEN: ${COMMUNITY_TOKEN:?set COMMUNITY_TOKEN}
+      S1D1_TERMS_VERSION: v1
+    volumes:
+      - capture:/capture
+    # no `ports:` on purpose
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # no curl in the image: urllib does the probe (/ready: the weights are loaded, as in tantive's own compose.yaml)
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8788/ready').status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging: *logging
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:?set CLOUDFLARED_IMAGE (update.sh writes it)}
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
+    depends_on:
+      - tantive
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+volumes:
+  capture:

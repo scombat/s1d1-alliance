@@ -1,0 +1,47 @@
+# node
+
+A community node: tantive (the s1d1 router) behind a Cloudflare Tunnel. The node opens no inbound port, and it only
+ever starts a tantive image whose cosign signature verifies.
+
+| File | Role |
+| --- | --- |
+| `compose.yaml` | `tantive` (no published port, read-only, capture volume), `capture-init` (gives the volume to uid 10001) and `cloudflared` (`tunnel run`). Runs unchanged on the Oracle instance and on a homelab. |
+| `desired.env` | The images every node runs, by digest. This is the file the nodes read from `main`. |
+| `update.sh` | `update.sh <env file> <desired url>`: download `desired.env`, verify, rewrite the images in the env file, `docker compose up -d`. |
+| `s1d1-update.service`, `s1d1-update.timer` | Run `update.sh` 2 minutes after boot and every 15 minutes. |
+| `cloud-init.yaml.tftpl` | Terraform `templatefile` for the Oracle instance (variables `tunnel_token`, `community_token`, `desired_url`). Embeds the files above verbatim. |
+| `cosign.pub` | The project key of s1d1-tantive, copied unchanged. It verifies images up to 0.5.0 only (see below). |
+| `example.env` | Template of `/opt/s1d1/.env`. |
+| `test/` | `sh node/test/test_update.sh` (update.sh, with fake `cosign`, `curl`, `docker`) and `sh node/test/test_cloud_init.sh` (the cloud-init copies have not drifted). |
+
+## What update.sh trusts
+
+`update.sh` reads `desired.env` and accepts nothing but `*_IMAGE=repository[:tag]@sha256:<64 hex>` lines. One bad
+line refuses the whole file (exit 1). For each image that differs from the env file:
+
+- `TANTIVE_IMAGE` is verified with `cosign verify <image> --certificate-identity-regexp <the build workflow of
+  scombat/s1d1-tantive> --certificate-oidc-issuer https://token.actions.githubusercontent.com`, exactly as
+  [s1d1-tantive/docs/verify.md](https://github.com/scombat/s1d1-tantive/blob/main/docs/verify.md) documents for
+  releases from 0.6.0 on (keyless, recorded in Rekor). `cosign.pub` does not verify 0.8.0 and is not used by the
+  script; it is installed for images up to 0.5.0, and kept as the copy of the key the brief asked for.
+- `CLOUDFLARED_IMAGE` is not signed by our key, so it is not cosign-verified. It is pinned by digest and changes only
+  through a pull request on `node/desired.env`. The set of verified keys is the `VERIFIED_KEYS` variable of the script.
+
+All verifications run before anything is written. The env file is replaced atomically (temporary file in the same
+folder, then `mv`, mode 0600); if `docker compose up` fails, the previous env file is put back and the next run retries.
+Exit codes: 0 up to date or updated, 1 refused or failed to apply (nothing changed), 2 the download failed.
+The tokens are never read, printed or logged by the script.
+
+## Dependencies
+
+- `docker.io` and `docker-compose-v2` from Ubuntu's own repositories: the simplest source of `docker compose`, with no
+  third-party apt key to trust.
+- `cosign` v3.1.4 from its GitHub release, pinned by version, its sha256 checked in cloud-init before installation.
+  Needed to verify the signatures; nothing else does it.
+- `cloudflare/cloudflared` 2026.10.3, pinned by digest: the tunnel client, the only thing that leaves the node.
+
+## Homelab
+
+Copy `compose.yaml`, `update.sh`, `s1d1-update.service` and `s1d1-update.timer` to `/opt/s1d1`, copy `example.env` to
+`/opt/s1d1/.env` (mode 0600) with the two secrets, install cosign, then `systemctl enable --now s1d1-update.timer`.
+The tunnel's ingress is `http://tantive:8788`: the service name on the Compose network.

@@ -61,4 +61,5 @@ Tokens, keys, OCIDs and `terraform.tfvars` are given to HCP Terraform or to the 
 ## Contents
 
 - `contract/` the ingestion contract (v1) and its fixtures.
+- `node/` the Compose file of a community node, its signed pull updates and its cloud-init.
 - `.gitleaks.toml`, `.pre-commit-config.yaml`, `.editorconfig`, `.gitignore`.

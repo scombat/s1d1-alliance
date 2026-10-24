@@ -1,0 +1,9 @@
+[Unit]
+Description=s1d1 node: verified pull update
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=10min
+ExecStart=/opt/s1d1/update.sh /opt/s1d1/.env https://raw.githubusercontent.com/scombat/s1d1-alliance/main/node/desired.env
