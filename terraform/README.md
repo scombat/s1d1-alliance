@@ -224,8 +224,11 @@ on `main`.
    `pattern` and `script`. The setting exists only in the dashboard: Workers & Pages, the Worker, Settings, Domains
    & Routes, the route, "Failure mode". Fail open bypasses the Worker when it cannot run, so `/api/*` would go
    straight to the tunnel without the allow-list, the cache and the maintenance switch; fail closed returns a
-   Cloudflare 1027 page. For `s1d1.qoo.gy/*` and `s1d1.qoo.gy/ingest`, choose **fail closed**, and check the
-   value after each apply (open question 4 of docs/26).
+   Cloudflare 1027 page. For `s1d1.qoo.gy/*` choose **fail open** (docs/26
+   decision 22): it is safe because the tunnel ingress still lists only the API paths and answers 404 for the rest
+   (`/metrics` included), and what is lost when the Worker cannot run is the cache, the maintenance switch and the
+   landing, which is accepted. For `s1d1.qoo.gy/ingest` choose **fail closed**, so that ingestion never reaches a
+   tunnel that does not serve it. Check both values after each apply (open question 4 of docs/26).
 2. **Tunnel connector.** The tunnel exists after the apply, with no connector: the nodes start `cloudflared` with
    `terraform output -raw tunnel_token`.
 3. **Google Cloud bootstrap, by hand, once.** A project with billing linked, `serviceusage.googleapis.com` and

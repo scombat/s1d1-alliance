@@ -72,9 +72,10 @@ The Cloud Run service needs an image that already exists, and the image needs th
 
 - **Route failure mode** (`cloudflare_workers_route` has no such field). Dashboard: Workers & Pages, the Worker,
   Settings, Domains & Routes, the route, "Failure mode".
-  - `s1d1.qoo.gy/*` (the `s1d1-site` Worker): **fail open**. If the Worker cannot run, the request goes to the
-    origin without the allow-list, the cache or the maintenance switch; accepted for the site, and the tunnel's own
-    ingress (`terraform/README.md`) still lists only the API paths and answers 404 for the rest.
+  - `s1d1.qoo.gy/*` (the `s1d1-site` Worker): **fail open** (docs/26 decision 22). If the Worker cannot run
+    (for example its quota is exhausted), the request goes straight to the tunnel. This is safe because the tunnel's own
+    ingress still lists only the API paths and answers 404 for everything else, `/metrics` included; what is lost is the
+    cache, the maintenance switch and the landing, which is accepted.
   - `s1d1.qoo.gy/ingest` (the `s1d1-ingest` Worker): **fail closed**. Failing open would send `/ingest` to a
     tunnel that does not serve it; closed returns a Cloudflare 1027 page and tantive retries.
   Check both after every apply (open question 4 of docs/26).
@@ -133,9 +134,16 @@ clean side: an object `clean/YYYY/MM/DD/<uuid>.ndjson` must exist for each recen
 
 ## 8. Reading `/metrics` (decision 49)
 
-`/api/metrics` answers 404 on the public name, by design (closed list). Read the metrics only from the node itself
-(the Compose file publishes no port, so use `docker compose exec` into the tantive container, or from another container on
-the Compose network), or through a Cloudflare Access application in front of a separate private hostname of the tunnel. Never open a public path for them.
+`/api/metrics` answers 404 on the public name, by design (closed list). Read the metrics only from the node itself. The
+Compose file publishes no port and the tantive image has python but no curl, so on the homelab:
+
+```
+docker compose -f /opt/s1d1/compose.yaml --env-file /opt/s1d1/.env exec tantive \
+  python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8788/metrics').read().decode())"
+```
+
+(`S1D1_ROOT_PATH=/api` is stripped before routing, so inside the container the path is `/metrics`.) Or go through a
+Cloudflare Access application in front of a separate private hostname of the tunnel. Never open a public path for them.
 
 ## 9. Smoke tests after the first deploy
 
@@ -171,7 +179,7 @@ From docs/26 section 5, after the checks of tasks 9 and 10 (the full text is in 
 
 - **Question 4, route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
   apply.
-- **Live behaviours not provable offline**: the six smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
+- **Live behaviours not provable offline**: the seven smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
   Eventarc, R2 EU write, GCS PUT, rate limit with the subrequest, peak memory).
 - **Eventarc retries**: the policy cannot be tuned in this provider version (`max_attempts = 1` only, no dead letter);
   a permanently failing object can be redelivered for 24 h. Watch Cloud Run's error rate.
