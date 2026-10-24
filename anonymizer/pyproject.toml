@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Turns the raw s1d1 captures into the anonymised clean corpus (GLiNER + validated patterns)."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
 dependencies = [
     "google-cloud-storage>=3.17,<4",
     "boto3>=1.43,<2",

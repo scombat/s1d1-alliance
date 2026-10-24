@@ -1,0 +1,11 @@
+s1d1-alliance
+Copyright 2026 Steve Combat
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Not covered by that licence: the legal pages of the site (site/conditions/, site/confidentialite/,
+site/mentions-legales/). Their text belongs to their author and may not be reused without permission.
+
+Third-party code:
+- workers/ingest/vendor/aws4fetch.js: aws4fetch 1.0.20, MIT License, Copyright Michael Hart 2024; its licence header is kept
+  in the file.
