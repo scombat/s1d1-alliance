@@ -18,6 +18,10 @@ terraform {
       source  = "hashicorp/google"
       version = "= 8.8.1"
     }
+    oci = {
+      source  = "oracle/oci"
+      version = "= 9.11.0"
+    }
     random = {
       source  = "hashicorp/random"
       version = "= 3.9.1"
@@ -37,4 +41,13 @@ provider "google" {
   region                = var.gcp_region
   user_project_override = true
   billing_project       = var.gcp_project
+}
+
+# Oracle Cloud: credentials are variables (API key of a user), never read from ~/.oci. The key is sensitive.
+provider "oci" {
+  tenancy_ocid = var.oci_tenancy_ocid
+  user_ocid    = var.oci_user_ocid
+  fingerprint  = var.oci_fingerprint
+  private_key  = var.oci_private_key
+  region       = var.oci_region
 }
