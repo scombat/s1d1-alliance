@@ -6,9 +6,9 @@ The free community instance of the s1d1 prompt router, at <https://s1d1.qoo.gy>.
 anonymiser, the Terraform for Cloudflare, Google Cloud and Oracle Cloud, and the Compose file of a community node.
 Nothing runs there that is not in this repository, and nothing in this repository is a secret.
 
-**Status:** under construction. This commit is the skeleton, the ingestion contract and the secret guard.
+**Status:** built and reviewed, not deployed yet (see [docs/operations.md](docs/operations.md)).
 
-**Licence:** to come. There is no `LICENSE` file yet; the licence is the maintainer's decision.
+**Licence:** Apache-2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)); the legal pages of the site are not covered. See [Licences of the s1d1 projects](#licences-of-the-s1d1-projects).
 
 ## The data path
 
@@ -63,3 +63,15 @@ Tokens, keys, OCIDs and `terraform.tfvars` are given to HCP Terraform or to the 
 - `contract/` the ingestion contract (v1) and its fixtures.
 - `node/` the Compose file of a community node, its signed pull updates and its cloud-init.
 - `.gitleaks.toml`, `.pre-commit-config.yaml`, `.editorconfig`, `.gitignore`.
+
+## Licences of the s1d1 projects
+
+| Project | Licence | Why |
+|---|---|---|
+| [s1d1-router](https://huggingface.co/scombat/s1d1-router) (the model) | Apache-2.0; the base model, mmBERT-base, is MIT | open weights, reusable anywhere |
+| [s1d1-alliance](https://github.com/scombat/s1d1-alliance) (this repository) | Apache-2.0 | community infrastructure, made to be forked |
+| [s1d1-tantive](https://github.com/scombat/s1d1-tantive) (the serving engine) | Business Source License 1.1, which becomes Apache-2.0 four years after each release | free for non-production use; production use by agreement while it funds the project |
+
+Everything converges on Apache-2.0: the model and this repository today, the serving engine on each release's change
+date.
+
