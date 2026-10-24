@@ -1,0 +1,11 @@
+# The gitleaks hook runs the installed binary (gitleaks 8.30.1, the version CI installs as well), not a
+# downloaded hook: the upstream hook needs Go to build. Install the binary, then `uvx pre-commit install`.
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --staged --redact --verbose
+        language: system
+        pass_filenames: false
+        always_run: true

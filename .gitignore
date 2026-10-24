@@ -1,0 +1,19 @@
+# Terraform: the variables file holds the account identifiers and tokens
+*.tfvars
+!*.auto.tfvars
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Dependencies and virtual environments
+node_modules/
+.venv/
+
+# Environment files: only the two node templates are versioned
+.env
+*.env
+!node/desired.env
+!node/example.env
+
+# Local working notes and plans
+.superpowers/
