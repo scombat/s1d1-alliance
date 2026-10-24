@@ -2,7 +2,9 @@
 
 Produced by `scripts/sample.py` with the two models of the image and the patterns. Every text is an invented
 sentence from `tests/fixtures`, never a real prompt. Names and addresses come from the models; emails,
-phones, IBANs, cards, IPs and secrets from the validated patterns.
+phones, IBANs, cards, IPs and secrets from the validated patterns. Where an email span and a
+`[URL_CREDENTIALS]` span overlap, the longer one wins: the `user:password@host` of a URL is marked `[EMAIL]`,
+and the credentials are masked either way.
 
 ## Covered scripts: masked
 
@@ -28,7 +30,7 @@ phones, IBANs, cards, IPs and secrets from the validated patterns.
 | `My card is 4111 1111 1111 1111, exp 12/27.` | `My card is [CARD], exp 12/27.` |
 | `The server is at 203.0.113.42 now.` | `The server is at [IP] now.` |
 | `Use postgres://admin:s3cretPass@db.example.com:5432/app` | `Use postgres://[EMAIL]:5432/app` |
-| `Open https://drive.google.com/file/d/1XcIF4Y8LEI8o0SMvFpdGcycil8eMy15j/view to see it.` | `Open https://drive.google.com/file/d/[SECRET]/view to see it.` |
+| `Authorization: Basic dXNlcjpodW50ZXIy` | `Authorization: Basic [SECRET]` |
 | `The order 3f2b8c1a-9d4e-4f6a-b2c7-8e1d0a5f6b3c failed.` | `The order [ID] failed.` |
 
 ## Uncovered scripts: the whole prompt is dropped

@@ -33,6 +33,8 @@ def pattern_examples() -> list[str]:
         if line.startswith("#") or "\t" not in line:
             continue
         expected, text = line.split("\t", 1)
+        if "drive.google.com" in text:  # an identifier that looks real: use another [SECRET] case
+            continue
         if expected in PATTERN_MARKERS and expected not in found:
             found[expected] = text
     return [found[m] for m in PATTERN_MARKERS if m in found]
@@ -52,7 +54,9 @@ def main() -> None:
         "",
         "Produced by `scripts/sample.py` with the two models of the image and the patterns. Every text is an invented",
         "sentence from `tests/fixtures`, never a real prompt. Names and addresses come from the models; emails,",
-        "phones, IBANs, cards, IPs and secrets from the validated patterns.",
+        "phones, IBANs, cards, IPs and secrets from the validated patterns. Where an email span and a",
+        "`[URL_CREDENTIALS]` span overlap, the longer one wins: the `user:password@host` of a URL is marked `[EMAIL]`,",
+        "and the credentials are masked either way.",
         "",
         "## Covered scripts: masked",
         "",
