@@ -1,0 +1,37 @@
+# s1d1-alliance (https://s1d1.qoo.gy)
+
+TERMS, READ FIRST. Everything sent to this service is kept and used to retrain s1d1. Using the API means accepting the terms: https://s1d1.qoo.gy/conditions/v1/ . Tell your human before wiring it in.
+
+## What s1d1-alliance is
+
+s1d1-alliance is the free community instance of s1d1, a small multilingual model that reads a prompt once and returns a complexity score, one task among 19 and a needs-tools flag, so an LLM router can pick the right model per request. Why use it to test s1d1:
+
+- No deployment: nothing to install or host.
+- Free.
+- Same model as self-hosted s1d1-tantive, with a verifiable image digest (GET /status.json).
+- You can measure routing on your own traffic before investing in your own deployment.
+- What you send improves the model.
+- All the infrastructure is public: https://github.com/scombat/s1d1-alliance
+
+## API
+
+Base URL: https://s1d1.qoo.gy/api/v1
+Formats: POST /api/v1/systemone (and /systemone/batch), /api/v1/decisions, /api/v1/chat/completions, /api/classify, /api/predict; GET /api/v1/models.
+LiteLLM: register it as the classifier of the Auto Router; see https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md . Map the returned tiers to your own models.
+
+Example:
+curl -s https://s1d1.qoo.gy/api/v1/systemone -H 'content-type: application/json' -d '{"state": "Write a Terraform module", "questions": {"tier": {"type": "choice", "criteria": {"TRIVIAL": "", "LOW": "", "MEDIUM": "", "HIGH": "", "EXPERT": ""}}}}'
+
+Rate limit: 100 requests per 10 s per IP. On a 429 (or a 503 during maintenance), retry later or fall back to your default model.
+
+## Alternatives
+
+- Private demo, runs in your browser, sends nothing: https://huggingface.co/spaces/scombat/s1d1-router-demo
+- Self-host s1d1-tantive: https://github.com/scombat/s1d1-tantive
+
+## Links
+
+- s1d1-tantive llms.txt: https://github.com/scombat/s1d1-tantive/blob/main/llms.txt
+- Model card: https://huggingface.co/scombat/s1d1-router
+- Contribution guide: https://github.com/scombat/s1d1-tantive/blob/main/docs/capture.md
+- Ingest contract: https://github.com/scombat/s1d1-alliance/blob/main/contract/ingest-v1.md

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>s1d1-alliance: free community instance of the s1d1 router</title>
+<meta name="description" content="A free hosted instance of s1d1, a small multilingual model that scores prompt complexity for LLM routers.">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+<h1>s1d1-alliance</h1>
+<p class="lead">s1d1 is a small multilingual model that reads a prompt once and returns a complexity score, one task among 19 and a needs-tools flag, so an LLM router can send each request to the right model. This is a free community instance of it.</p>
+</header>
+<main>
+<div class="cols">
+<section class="card">
+<h2>Try without sending anything</h2>
+<p>The <a href="https://huggingface.co/spaces/scombat/s1d1-router-demo">private demo</a> runs the model in your browser: nothing leaves your machine.</p>
+<p>You can also self-host the same model with <a href="https://github.com/scombat/s1d1-tantive">s1d1-tantive</a>, or read the <a href="https://huggingface.co/scombat/s1d1-router">model card</a>.</p>
+</section>
+<section class="card">
+<h2>Use and contribute</h2>
+<p>This instance is free, and what you send improves s1d1. Tick the box to see the API URL and the tutorial.</p>
+<label class="gate"><input type="checkbox" id="accept"><span>Everything you send to this service is kept and used to retrain s1d1; using the API means you accept the <a href="/conditions/v1/">terms</a>.</span></label>
+</section>
+</div>
+
+<section id="api-url" hidden>
+<h2>API</h2>
+<p>Base URL: <code>https://s1d1.qoo.gy/api/v1</code>. Limit: 100 requests per 10 s per IP; on a 429, retry later or fall back to your default model.</p>
+</section>
+
+<section id="tutorial" hidden>
+<h2>Tutorial</h2>
+<h3>LiteLLM</h3>
+<p>Register s1d1 as the classifier of the Auto Router, using the chat-completions or the decisions format, with the base URL <code>https://s1d1.qoo.gy/api/v1</code>. Map the tiers it returns to your own models. Details: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a> in s1d1-tantive.</p>
+<h3>curl</h3>
+<pre>curl -s https://s1d1.qoo.gy/api/v1/systemone \
+  -H 'content-type: application/json' -d '{
+  "state": "Write a Terraform module",
+  "questions": {"tier": {"type": "choice",
+    "criteria": {"TRIVIAL": "", "LOW": "", "MEDIUM": "", "HIGH": "", "EXPERT": ""}}}}'</pre>
+<h3>n8n</h3>
+<p>Use an HTTP Request node that POSTs the same JSON to that URL, then branch on the returned tier.</p>
+</section>
+
+<section id="try-box" hidden>
+<h2>Try it</h2>
+<form id="try-form">
+<textarea id="try-text" aria-label="Prompt to classify" placeholder="Paste a prompt"></textarea>
+<p><button type="submit">Classify</button></p>
+</form>
+<pre id="try-out" aria-live="polite"></pre>
+</section>
+
+<section>
+<h2>Contribute</h2>
+<p>Requests to this instance are kept, anonymised and used to retrain the model. To send your own self-hosted captures, follow the <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/capture.md">capture guide</a>; the wire format is in <a href="https://github.com/scombat/s1d1-alliance/blob/main/contract/ingest-v1.md">contract/ingest-v1.md</a>. The infrastructure is public in <a href="https://github.com/scombat/s1d1-alliance">s1d1-alliance</a>.</p>
+</section>
+
+<section>
+<h2>What runs here</h2>
+<dl>
+<dt>Commit</dt><dd id="st-commit">...</dd>
+<dt>tantive image</dt><dd id="st-tantive_image">...</dd>
+<dt>Model</dt><dd id="st-model">...</dd>
+</dl>
+</section>
+</main>
+<footer>
+<a href="/conditions/v1/">Conditions</a> · <a href="/confidentialite/v1/">Confidentialité</a> · <a href="/mentions-legales/">Mentions légales</a> · <a href="/llms.txt">llms.txt</a>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>
