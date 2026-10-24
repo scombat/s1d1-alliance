@@ -119,9 +119,8 @@ cosign and the timer, and follows `node/desired.env` on `main` by itself. A node
    (the URL is the one in `s1d1-update.service`:
    `https://raw.githubusercontent.com/scombat/s1d1-alliance/main/node/desired.env`).
 5. Check: `docker compose -f /opt/s1d1/compose.yaml --env-file /opt/s1d1/.env ps`, and `journalctl -u s1d1-update`.
-   `desired.env` carries a placeholder digest until tantive 0.8.0 is published; a placeholder is not `sha256:<64 hex>`,
-   so `update.sh` refuses the file at its format check (exit 1) before any cosign verification, and the node starts
-   nothing, which is the intended behaviour.
+   `desired.env` pins tantive 0.8.0 by digest. A value that is not `sha256:<64 hex>` (a placeholder, a tag alone) is
+   refused at `update.sh`'s format check (exit 1) before any cosign verification, and the node keeps what it runs.
 
 ## 6. Emergency stop: `MAINTENANCE`
 
