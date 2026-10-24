@@ -20,15 +20,16 @@ The contract it reads is `contract/ingest-v1.md`; `contract/fixtures/valid.ndjso
    - Without `RAW_BUCKET` set, a raw object is not read and the answer is 500 (a configuration error, retried until
      it is fixed). Another path is a 404, another method a 405.
 2. Reads the object (`google-cloud-storage`, with the identity of the service), splits it into lines, and cleans each
-   line (`src/anonymizer/clean.py`). A line is dropped, and counted, when it is not JSON, has no prompt, has a
-   `source` other than `capture:community`, `capture:direct` or `capture:selfhosted:<lower-case uuid>`, has a
-   `terms_version` other than `v` and 1 to 3 digits, or has a prompt mostly in a script the anonymiser does not cover
-   (see below; counted as `dropped_uncovered_script`). Otherwise the clean line has exactly these keys, in this order:
+   line (`src/anonymizer/clean.py`). A line is dropped, and counted, when it is not JSON, has no prompt or no string
+   `id`, has a `source` other than `capture:community`, `capture:direct` or `capture:selfhosted:<lower-case uuid>`,
+   has a `terms_version` other than `v` and 1 to 3 digits, or has more than a few letters in a script the anonymiser
+   does not cover (see below; counted as `dropped_uncovered_script`). Otherwise the clean line has exactly these
+   keys, in this order:
 
    | key | value |
    |---|---|
    | `id` | the id when it is a UUID (lower-cased), otherwise the first 32 hex of its SHA-256 |
-   | `time` | the capture day `YYYY-MM-DD`; without a usable `time`, the day the Worker received the line; else null |
+   | `time` | the capture day `YYYY-MM-DD` (a real calendar date); without one in `time`, the day the Worker received the line; else null |
    | `prompt` | anonymised |
    | `source` | as checked above (it keeps the instance UUID of a self-hosted node, decision 13) |
    | `model_revision` | 7 to 40 lower-case hex, else null |
@@ -72,9 +73,11 @@ model directory. That script is the only step that downloads: `uv run --extra mo
 `local_files_only=True`).
 
 Both run at threshold 0.5 with the labels `person`, `address`, `phone number`, `email`, and `passport number`,
-`national id number`, `social security number`, `tax id` (all `[ID]`). A `person` span that is a pronoun or a role of
-the conversation (`I`, `you`, `eu`, `你`, `user`, `assistant`...) is not kept: they name no one, and urchade's model
-tags them often (on 300 prompts of the router's test set, 173 of its 610 person spans, in 25 prompts that had no other).
+`national id number`, `social security number`, `tax id` (all `[ID]`). A `person` span that is a single letter, or a
+single token written in lower case that is a pronoun or a role of the conversation (`you`, `eu`, `你`, `user`,
+`assistant`...), is not kept: they name no one, and urchade's model tags them often. The list holds no word that is also
+a common given name (no `ben`, `ella`, `elle`, `ty`, `lei`), and a capitalised `Ella` or `Ben` is never suppressed (on 300 prompts of the router's test set, before the list was narrowed: 173 of its 610 person spans, in 25 prompts
+that had no other).
 What is left is mostly real names, of people and of fictional characters: on those 300 prompts, knowledgator's model
 marks a person in 79 and urchade's in 117.
 
@@ -87,8 +90,13 @@ models one by one, since their word splitter cuts on spaces and punctuation only
 
 A script is **covered** when, in the slow tests, the ensemble masks every name and every address of every fixture of
 `tests/fixtures/pii/` written in it (each fixture is one invented sentence with a name, an address and a phone
-number). A prompt whose letters are more than half in scripts that are not covered is **dropped**, not stored
-(`src/anonymizer/coverage.py`): what the anonymiser cannot vouch for does not enter the permanent corpus.
+number). A prompt is **dropped**, not stored (`src/anonymizer/coverage.py`), when its letters in scripts that are not
+covered reach 8, or are more than 5 % of its letters, whichever comes first: what the anonymiser cannot vouch for does
+not enter the permanent corpus, and a short English lead or trailer around a Russian address (`Please translate: Ольга
+Смирнова, ул. Ленина, д. 12…`) does not save it. A single uncovered word of 7 letters or less is kept only in a text
+long enough for it to be 5 % of the letters or less (140 letters for a 7-letter word): `Translate the word привет into
+English` is dropped, the same word in a 170-letter paragraph is kept, since a lone short word cannot hold a name and
+an address. `tests/fixtures/mixed_scripts.txt` holds these cases.
 
 | script | fixtures | result at the pinned commits | |
 |---|---|---|---|
@@ -104,9 +112,10 @@ number). A prompt whose letters are more than half in scripts that are not cover
 | Thai | th | nothing masked by the models | dropped |
 | any other | none | never tested | dropped |
 
-Han characters count as Japanese when 5 % of the letters are kana. On the router's training set (98 033 prompts of six
-public sources) this rule drops 10 % of the prompts: Cyrillic 5 167, Japanese 856, then Devanagari, Gurmukhi, Sinhala,
-Tamil, Telugu, Gujarati, Thai and others. A script becomes covered when a fixture shows it: add the fixture, see the
+Han characters count as Japanese when kana are 5 % of the CJK letters (kana and Han, so Latin padding does not count).
+On the router's training set (98 033 prompts of six public sources) this rule drops 10.8 % of the prompts: Cyrillic
+5 710, Japanese 979, then Devanagari, Gurmukhi, Sinhala, Tamil, Telugu, Gujarati, Thai and others; 720 of them are
+mostly in covered scripts, with a few uncovered words. A script becomes covered when a fixture shows it: add the fixture, see the
 slow tests pass, add the script to `COVERED_SCRIPTS`; `test_uncovered_scripts_are_really_missed` fails the day an
 uncovered script is in fact masked.
 

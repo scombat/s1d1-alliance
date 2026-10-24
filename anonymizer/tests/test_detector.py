@@ -14,6 +14,7 @@ from anonymizer.coverage import COVERED_SCRIPTS, letter_scripts
 from anonymizer.detector import (
     LABELS,
     MODELS,
+    NOT_A_PERSON,
     Detector,
     EnsembleDetector,
     GlinerDetector,
@@ -213,3 +214,15 @@ def test_pronouns_and_roles_are_not_persons():
     text = "I told you that Ana Lima and 你 met the user."
     detector = _detector(FakeModel(["I", "you", "Ana Lima", "你", "user"]))
     assert sorted(text[s:e] for s, e, _ in detector.spans(text)) == ["Ana Lima"]
+
+
+def test_the_stoplist_never_hides_a_name():
+    for text, name in (("Ask Ella about the invoice", "Ella"), ("Tell Ben the plan", "Ben"), ("ask ella now", "ella")):
+        detector = _detector(FakeModel([name]))
+        assert anonymize(text, detector).count("[PERSON]") == 1, text
+    # a capitalised stop word is kept too (only lower-case single tokens are suppressed)
+    detector = _detector(FakeModel(["User", "you", "the user"]))
+    spans = detector.spans("User said you met the user")
+    assert sorted("User said you met the user"[s:e] for s, e, _ in spans) == ["User", "the user"]
+    for name in ("ben", "ella", "elle", "ty", "lei", "ela", "ona", "io", "sen", "my", "mi", "lui", "toi", "on"):
+        assert name not in NOT_A_PERSON, name

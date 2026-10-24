@@ -7,6 +7,7 @@ dropped. A prompt written mostly in a script the anonymiser does not cover is dr
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import math
@@ -83,19 +84,25 @@ def anonymize(text: str, detector: Detector) -> str:
 
 
 def _day(raw: dict) -> str | None:
+    """The first of `time` and `received` that starts with a real calendar date (2026-02-30 is not one)."""
     for key in ("time", "received"):
         value = raw.get(key)
         if isinstance(value, str) and _DAY.match(value):
-            return value[:10]
+            try:
+                return datetime.date.fromisoformat(value[:10]).isoformat()
+            except ValueError:
+                continue
     return None
 
 
-def _clean_id(value: object) -> str:
-    """A UUID (in lower case); anything else (a sender may put anything there) as the first 32 hex of its SHA-256."""
-    text = value if isinstance(value, str) else json.dumps(value)
-    if _UUID.fullmatch(text.lower()):
-        return text.lower()
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+def _clean_id(value: object) -> str | None:
+    """A UUID (in lower case); any other non-empty string (a sender may put anything there) as the first 32 hex of
+    its SHA-256; None for no usable id (absent, empty, not a string), never a hash of "null"."""
+    if not isinstance(value, str) or not value:
+        return None
+    if _UUID.fullmatch(value.lower()):
+        return value.lower()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
 
 
 def _probability(value: object) -> float | None:
@@ -122,12 +129,13 @@ def clean_line_reason(raw: object, detector: Detector) -> tuple[dict | None, str
         return None, DROPPED
     source = _matching(raw.get("source"), _SOURCE)
     terms = _matching(raw.get("terms_version"), _TERMS)
-    if source is None or terms is None:
+    line_id = _clean_id(raw.get("id"))
+    if source is None or terms is None or line_id is None:
         return None, DROPPED
     if is_uncovered(prompt):
         return None, UNCOVERED_SCRIPT
     values = {
-        "id": _clean_id(raw.get("id")),
+        "id": line_id,
         "time": _day(raw),
         "prompt": anonymize(prompt, detector),
         "source": source,
@@ -144,13 +152,13 @@ def clean_line_reason(raw: object, detector: Detector) -> tuple[dict | None, str
 def clean_line(raw: object, detector: Detector) -> dict | None:
     """The decision-11 line of a raw line, or None when it is dropped.
 
-    Every key is present, in the order of CLEAN_KEYS. `time` is the capture day; without a usable `time`, the day
-    the Worker received the line (`received`); null when neither is there. `id` is kept when it is a UUID
-    (lower-cased), otherwise replaced by the first 32 hex of its SHA-256. `format`, `pred_tier` and `pred_task` must
-    be values tantive emits, `model_revision` a hex revision, the `pred_*` numbers probabilities in [0, 1]: otherwise
-    null. The line is dropped without a prompt, without a known source (`capture:community`, `capture:direct`,
-    `capture:selfhosted:<lower-case uuid>`) or terms version (`v` and 1 to 3 digits), or when its prompt is mostly in
-    a script the anonymiser does not cover.
+    Every key is present, in the order of CLEAN_KEYS. `time` is the capture day; without a usable `time` (a real
+    calendar date), the day the Worker received the line (`received`); null when neither is there. `id` is kept when
+    it is a UUID (lower-cased), otherwise replaced by the first 32 hex of its SHA-256. `format`, `pred_tier` and
+    `pred_task` must be values tantive emits, `model_revision` a hex revision, the `pred_*` numbers probabilities in
+    [0, 1]: otherwise null. The line is dropped without a prompt, without a string id, without a known source
+    (`capture:community`, `capture:direct`, `capture:selfhosted:<lower-case uuid>`) or terms version (`v` and 1 to 3
+    digits), or when its prompt has more than a few letters in a script the anonymiser does not cover.
     """
     return clean_line_reason(raw, detector)[0]
 

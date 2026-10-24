@@ -54,3 +54,5 @@
 [SECRET]	Мой пароль: подсолнух
 [PHONE]	Chiamami al 333 123 4567 stasera.
 [PHONE]	Il mio cellulare è 347 1234567.
+[EMAIL]	Connect with ssh://jean.dupont@exemple.fr tonight.
+[EMAIL]	Use mailto://marie.lefevre@gmail.com for the form.

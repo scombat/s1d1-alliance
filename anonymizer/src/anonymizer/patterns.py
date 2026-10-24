@@ -399,7 +399,9 @@ _EMAIL = re.compile(
     r"(?:[a-z]{2,24}(?![a-z0-9\-])|[A-Z][a-z]{1,23}(?![a-z0-9\-])|[A-Z]{2,24}(?![A-Za-z0-9\-])"
     r"|xn--[A-Za-z0-9\-]{2,59}(?![A-Za-z0-9\-])|[^\W\d_\x00-\x7f]{2,24}(?![\w\-])))"
 )
-_IN_URL_AUTHORITY = re.compile(r"(?i)[a-z][a-z0-9+.\-]{1,20}://[^\s/?#@]*$")
+# The authority of a URL with a password, up to the start of the email: the "password@host" of
+# scheme://user:password@host is [URL_CREDENTIALS] and a host, not an email; ssh://jean.dupont@exemple.fr is an email.
+_IN_URL_AUTHORITY = re.compile(r"(?i)[a-z][a-z0-9+.\-]{1,20}://[^\s/?#@]*:[^\s/?#@]*$")
 _RETINA = re.compile(r"[0-9]+x\.", re.I)
 _UUID = re.compile(
     r"(?<![0-9A-Za-z])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Za-z])"

@@ -55,31 +55,35 @@ LABELS: dict[str, str] = {
 }
 
 # Words the models tag as persons at 0.5 that name no one: pronouns and the roles of a conversation. urchade's model
-# tags "I", "you", "eu", "你" as persons in about a third of ordinary prompts; dropping these spans loses no name.
+# tags "i", "you", "eu", "你" as persons often. No entry is also a common given name (Ben, Ella, Elle, Ty, Lei, Ela,
+# Ona, Io, Sen, My, Mi, Lui, Toi, On... are left out), and the list only applies to a single token written in lower
+# case in the prompt: a capitalised "Ella" or "Ben" is never suppressed.
 NOT_A_PERSON = frozenset(
     """
-    i me my mine myself you your yours yourself he him his she her hers we us our they them their it someone
+    i me mine myself you your yours yourself he him his she her hers we us our they them their it someone
     somebody anyone user users username assistant bot chatbot ai human customer client friend
-    je moi tu toi il elle nous vous ils elles on lui eux
-    yo mí mi tú ti usted él ella nosotros vosotros ellos ellas
-    eu você vocês ele ela nós eles elas
-    io me te lui lei noi voi loro
+    je tu il nous vous ils elles eux
+    yo tú usted él nosotros vosotros ellos ellas
+    eu você vocês ele nós eles elas
+    te noi voi loro
     ich mich mir du dich dir er sie wir ihr
-    ben sen o biz siz onlar ja ty on ona my wy oni
+    biz siz onlar ja wy oni
     εγώ εσύ αυτός αυτή εμείς εσείς
-    אני אתה את הוא היא אנחנו
+    אני אתה הוא היא אנחנו
     أنا أنت أنتِ هو هي نحن هم
-    من تو او ما شما
+    تو او شما
     我 你 您 他 她 我们 你们 他们 她们 用户 助手
-    저 나 너 당신 그 그녀 우리 사용자
+    저 나 너 당신 그녀 우리 사용자
     """.split()
 )
 
 
 def not_a_person(span: str) -> bool:
-    """A model "person" span that names no one: a pronoun, a role, a single Latin letter or a placeholder."""
-    word = span.strip(" \t\n.,;:!?\"'()[]").lower()
-    return not word or word in NOT_A_PERSON or (len(word) == 1 and word.isascii())
+    """A model "person" span that names no one: a single letter, or a single lower-case token of NOT_A_PERSON."""
+    word = span.strip(" \t\n.,;:!?\"'()[]")
+    if not word or (len(word) == 1 and word.isascii() and word.isalpha()):
+        return True  # "I", "J": a lone letter identifies no one
+    return word == word.lower() and not any(ch.isspace() for ch in word) and word in NOT_A_PERSON
 
 
 # Han, kana and the CJK compatibility block are written without spaces: each character is its own word, so that the

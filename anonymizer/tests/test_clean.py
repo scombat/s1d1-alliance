@@ -6,9 +6,11 @@ import hashlib
 import json
 import re
 
-from fakes import FakeDetector, NoDetector, clean_expected_text, raw_valid_lines
+import pytest
+from fakes import FIXTURES, FakeDetector, NoDetector, clean_expected_text, raw_valid_lines
 
 from anonymizer.clean import CLEAN_KEYS, anonymize, clean_line, clean_line_reason, dumps_line
+from anonymizer.coverage import is_uncovered, letter_scripts
 
 DECISION_11 = [
     "id",
@@ -153,7 +155,16 @@ def test_an_id_that_is_not_a_uuid_is_hashed():
     assert clean_line(_base(id=UUID.upper()), NoDetector())["id"] == UUID
     expected = hashlib.sha256(b"jane@example.com").hexdigest()[:32]
     assert clean_line(_base(id="jane@example.com"), NoDetector())["id"] == expected
-    assert re.fullmatch(r"[0-9a-f]{32}", clean_line(_base(id=42), NoDetector())["id"])
+    assert re.fullmatch(r"[0-9a-f]{32}", clean_line(_base(id="order 42"), NoDetector())["id"])
+    for unusable in (None, "", 42, ["x"]):
+        assert clean_line_reason(_base(id=unusable), NoDetector()) == (None, "dropped"), unusable
+    assert clean_line_reason({k: v for k, v in _base().items() if k != "id"}, NoDetector()) == (None, "dropped")
+
+
+def test_time_must_be_a_real_calendar_date():
+    assert clean_line(_base(time="2026-02-30T10:00:00Z", received="2026-10-24"), NoDetector())["time"] == "2026-10-24"
+    assert clean_line(_base(time="2026-13-01", received="2026-99-99"), NoDetector())["time"] is None
+    assert clean_line(_base(time="2024-02-29T00:00:00Z"), NoDetector())["time"] == "2024-02-29"
 
 
 def test_a_prompt_mostly_in_an_uncovered_script_is_dropped():
@@ -176,8 +187,28 @@ def test_a_prompt_mostly_in_an_uncovered_script_is_dropped():
         "Je m'appelle Léa.",
     ):
         assert clean_line(_base(prompt=prompt), NoDetector()) is not None, prompt
-    # mostly Latin with a Russian word: kept (and anonymised as Latin text)
-    assert clean_line(_base(prompt="Translate the word привет into English, please, for my class."), NoDetector())
+
+
+def _mixed_cases():
+    for raw in (FIXTURES / "mixed_scripts.txt").read_text(encoding="utf-8").splitlines():
+        if raw.strip() and not raw.startswith("#"):
+            yield raw.split("\t", 1)
+
+
+@pytest.mark.parametrize(("expected", "prompt"), list(_mixed_cases()))
+def test_mixed_scripts_drop_on_a_few_uncovered_letters(expected, prompt):
+    # 8 letters or 5 % in uncovered scripts drop the line, whatever surrounds them; a lone short word in a long
+    # text is kept
+    _, reason = clean_line_reason(_base(prompt=prompt), NoDetector())
+    assert reason == ("dropped_uncovered_script" if expected == "drop" else None), prompt
+
+
+def test_kana_are_counted_among_cjk_letters_only():
+    padded = "Please check this line: " * 10 + "東京都新宿区西新宿に住んでいます"
+    assert letter_scripts(padded).get("JAPANESE", 0) == 16
+    assert "HAN" not in letter_scripts(padded)
+    assert is_uncovered(padded)
+    assert not is_uncovered("请把这段代码改成支持 Python 3.12 的版本。")
 
 
 def test_valid_fixture_matches_clean_expected():
