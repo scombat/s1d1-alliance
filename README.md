@@ -3,7 +3,7 @@
 The free community instance of the s1d1 prompt router, at <https://s1d1.qoo.gy>.
 
 **This repository is everything that runs s1d1.qoo.gy:** the landing page, the `api` and `ingest` Workers, the
-anonymiser, the Terraform for Cloudflare, Google Cloud and Oracle Cloud, and the Compose file of a community node.
+anonymiser, the Terraform for Cloudflare, Google Cloud and Hetzner Cloud, and the Compose file of a community node.
 Nothing runs there that is not in this repository, and nothing in this repository is a secret.
 
 **Status:** built and reviewed, not deployed yet (see [docs/operations.md](docs/operations.md)).
@@ -26,7 +26,7 @@ Nothing runs there that is not in this repository, and nothing in this repositor
                            Cloudflare Tunnel              GCS "raw" (EU, 3 days)
                          ┌─────────┴─────────┐                     │ object created
                          ▼                   ▼                     ▼ Eventarc
-                  Oracle A1: tantive   homelab: tantive    Cloud Run: GLiNER + regex
+                  Hetzner: tantive     homelab: tantive    Cloud Run: GLiNER + regex
                          └──── captures ─────┘                     │
                                sent to /ingest                     ▼
                                                           R2 "clean" (EU, kept)
@@ -48,9 +48,9 @@ These are done by hand, once, by the maintainer. No secret is stored in this rep
 1. A **Cloudflare** account with the zone `qoo.gy`.
 2. A **Google Cloud** project with billing enabled.
 3. A **HCP Terraform** organisation, which runs the Terraform in this repository.
-4. An **Oracle Cloud** account whose home region is in the EU.
+4. A **Hetzner Cloud** account and project (paid, about 6 EUR excluding VAT a month for the node), with its own billing.
 
-Tokens, keys, OCIDs and `terraform.tfvars` are given to HCP Terraform or to the nodes, never committed.
+Tokens, keys and `terraform.tfvars` are given to HCP Terraform or to the nodes, never committed.
 
 ## Secrets
 

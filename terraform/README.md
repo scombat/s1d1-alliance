@@ -4,7 +4,7 @@ Infrastructure of the public instance `s1d1.qoo.gy`, in HCP Terraform (workspace
 This folder holds the Cloudflare part (tunnel, DNS, Workers, routes, rate limit, R2) and the Google Cloud part (raw
 bucket, service accounts, anonymizer on Cloud Run, Eventarc, budget, CI identity): `gcp.tf`, `budget.tf`, `wif.tf`.
 
-Providers are pinned exactly: `cloudflare/cloudflare = 5.28.1`, `hashicorp/google = 8.8.1`, `hashicorp/random = 3.9.1`, `oracle/oci = 9.11.0`
+Providers are pinned exactly: `cloudflare/cloudflare = 5.28.1`, `hashicorp/google = 8.8.1`, `hashicorp/random = 3.9.1`, `hetznercloud/hcloud = 1.70.1`
 (no `google-beta`: every resource used is GA). The lock file
 `.terraform.lock.hcl` is committed with the hashes for `linux_amd64` (CI, HCP) and `darwin_arm64` (laptops).
 To add a platform or upgrade: `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`.
@@ -61,13 +61,9 @@ terraform validate
 | `anonymizer_image` | no | null | `<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>`, built by CI from this repo; a tag without a digest is refused. Null: no Cloud Run service, no Eventarc trigger, no anonymizer IAM bindings (first apply) |
 | `github_repository` | no | `scombat/s1d1-alliance` | the repository whose `main` branch may push images |
 | `github_repository_owner_id` | no | empty | optional numeric id of the GitHub owner, added to the federation condition |
-| `oci_tenancy_ocid` | no | none | Oracle Cloud tenancy |
-| `oci_user_ocid` | no | none | Oracle Cloud user whose API key Terraform uses |
-| `oci_fingerprint` | no | none | fingerprint of that API key |
-| `oci_private_key` | yes | none | PEM content of the API key (not a path) |
-| `oci_region` | no | `eu-paris-1` | region (the home region, for Always Free) |
-| `oci_compartment_ocid` | no | none | compartment of the network and the instance |
-| `oci_availability_domain_index` | no | `0` | availability domain (0, 1, 2) of the instance: see "Oracle node" |
+| `hcloud_token` | yes | none | API token (Read & Write) of the Hetzner Cloud project that holds the node |
+| `hcloud_location` | no | `nbg1` | `fsn1`, `nbg1` or `hel1`: the EU locations only, on purpose (the node stays in the EU) |
+| `hcloud_server_type` | no | `cax11` | Arm (Ampere), 2 vCPU, 4 GB RAM, 40 GB disk; x86 fallback `cx23` or `cpx22`: see "Hetzner node" |
 
 The GCS values of the ingest Worker (`RAW_BUCKET`, `GCS_HMAC_ID`, `GCS_HMAC_SECRET`) are not variables: they are
 `local.raw_bucket_name`, `local.gcs_hmac_id` and `local.gcs_hmac_secret`, defined in `gcp.tf` from the raw bucket and
@@ -88,7 +84,7 @@ Four outputs of the Google part are not sensitive: `ci_workload_identity_provide
 (the two inputs of `google-github-actions/auth`), `artifact_registry_repository` (where to push) and
 `anonymizer_url` (null until `anonymizer_image` is set). No GCP secret is an output; the HMAC secret only goes to the ingest Worker binding.
 
-`node_public_ip` (not sensitive) is the Oracle node's address; nothing listens on it.
+`node_ipv4` (not sensitive) is the Hetzner node's IPv4 address; nothing listens on it.
 
 Read one with `terraform output -raw community_token` (or in the workspace page).
 
@@ -216,29 +212,41 @@ Create the provider token in the dashboard with the permissions that the provide
   creator holds, so the provider token also needs the R2 write permission above.
 - Zone `qoo.gy`: Workers Routes Write, DNS Write, and the zone ruleset (Zone WAF / rate limiting) write permission.
 
-## Oracle node (`oci.tf`)
+## Hetzner node (`hetzner.tf`)
 
-One `VM.Standard.A1.Flex` instance (2 OCPU, 12 GB, Always Free range) on the latest Canonical Ubuntu 24.04 aarch64
-image, in a dedicated VCN (`10.0.0.0/24`) with a public subnet, an internet gateway and a route to it. The cloud-init
-is `../node/cloud-init.yaml.tftpl`, filled with the tunnel token, the community token and the URL of `node/desired.env`
-on `main`.
+One `hcloud_server` of type `cax11` (Arm / Ampere, 2 vCPU, 4 GB RAM, 40 GB disk; about 6 EUR a month excluding VAT, paid
+by the Hetzner project, which has its own billing: the Google Cloud budget does not cover it) in `nbg1`, on the image
+`ubuntu-24.04`. Hetzner images are published for both architectures under the same name; the provider asks for the one
+that matches the server type (`GetForArchitecture` in `internal/server/resource.go` of hcloud 1.70.1), so the node gets
+the Arm build. The server has a public IPv4 and a public IPv6 address (ghcr.io and github.com are not all reachable
+over IPv6 only). The cloud-init is `../node/cloud-init.yaml.tftpl`, filled with the tunnel token, the community token
+and the URL of `node/desired.env` on `main`. Server and firewall carry the labels `project=s1d1-alliance`,
+`role=node`.
 
-- **No inbound access at all.** The subnet's `security_list_ids` holds only `s1d1-node-no-ingress` (egress to
-  `0.0.0.0/0`, every protocol, and no ingress rule), which replaces the VCN's default list that would allow SSH and
-  ICMP in. The public IP is there only so the node can go out (tunnel, ghcr.io, raw.githubusercontent.com, apt).
-  The compose publishes no port.
-- **No SSH key.** To look inside the node, use the OCI console (Compute, the instance, Console connection) or Cloud
-  Shell. The image sets no local password, so the serial console only shows boot and cloud-init output. A node you
-  cannot repair is replaced (`terraform apply -replace=oci_core_instance.node`): it holds no state that matters (the
-  capture folder is kept two days).
-- **No drift on a running node.** `lifecycle { ignore_changes = [metadata, source_details] }`: a newer Ubuntu image or
-  an edited cloud-init does not replace the instance. The node follows `desired.env` by itself.
-- **"Out of host capacity".** A1 capacity is often exhausted in a region. The apply then fails on the instance only
-  (the network is created). Set `oci_availability_domain_index` to another value (`1`, `2`; `eu-paris-1` has a single
-  AD, in which case just retry later) and apply again.
-- **API key.** Create it for a user in the OCI console (Profile, API keys, Add), put the fingerprint in
-  `oci_fingerprint` and the PEM in the sensitive workspace variable `oci_private_key`. That user needs `manage`
-  rights on `virtual-network-family` and `instance-family` in the compartment (the image is a platform image).
+- **No inbound access at all.** `hcloud_firewall.node` has no `rule` block and is attached to the server with
+  `firewall_ids`. Hetzner's documentation: "If you do not set any rule, all inbound traffic will automatically be
+  blocked" and all outbound traffic is permitted
+  (<https://docs.hetzner.com/cloud/firewalls/overview/>). The public addresses are there only so the node can go out
+  (tunnel, ghcr.io, raw.githubusercontent.com, apt). The compose publishes no port.
+- **No SSH key, no password login.** Without `ssh_keys`, Hetzner e-mails a root password. The cloud-init sets
+  `ssh_pwauth: false` and stops and masks `ssh.service` and `ssh.socket`, so that password is of no use over the
+  network; it still opens a session on the web console. Change that password at the first
+  console login or reset it from the Console. To look inside the node, use the
+  Hetzner Console (the server, "Console": web VNC) with that password. A node you cannot repair is
+  replaced (`terraform apply -replace=hcloud_server.node`): it holds no state that matters (the capture folder is kept
+  two days).
+- **No drift on a running node.** `lifecycle { ignore_changes = [user_data, image] }`: a newer Ubuntu image or an edited
+  cloud-init does not replace the server. The node follows `desired.env` by itself.
+- **Arm capacity.** The apply can fail on the server when Hetzner has no CAX capacity in the location (the product page
+  sometimes shows the CAX plans as unavailable). The firewall is created anyway; set `hcloud_location` to another of
+  the three EU locations and apply again, or retry later. If CAX (Arm) stays unavailable, set `hcloud_server_type` to a shared x86 type with 4 GB of RAM: `cx23`
+  (2 vCPU, 40 GB, Cost-Optimized; Hetzner's current smallest x86 type, successor of `cx22`) or `cpx22` (2 AMD vCPU, 80 GB,
+  Regular Performance). Hetzner's product pages list both for `nbg1` and `hel1` (not `fsn1`); check the Console for
+  the location you choose. Nothing else changes: the image follows the architecture of the type, and the cloud-init
+  carries the cosign checksums for aarch64 and x86_64.
+- **API token.** In the Hetzner Console, open the project, Security, API tokens, "Generate API token" with the
+  permission **Read & Write**, and put it in the sensitive workspace variable `hcloud_token`. A token belongs to one
+  project: the node, its firewall and its IPs live in that project.
 
 ## Manual steps (Terraform cannot do them)
 

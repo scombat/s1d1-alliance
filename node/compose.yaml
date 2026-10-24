@@ -2,7 +2,7 @@
 # reaches tantive is what `cloudflared` forwards (ingress `http://tantive:8788`, set on the tunnel), and the only
 # traffic that leaves is the tunnel and the capture sender (https://s1d1.qoo.gy/ingest).
 #
-# Generic: the same file runs on the Oracle A1 instance and on a homelab. The images (TANTIVE_IMAGE,
+# Generic: the same file runs on the Hetzner VM and on a homelab. The images (TANTIVE_IMAGE,
 # CLOUDFLARED_IMAGE) are written into .env by update.sh from desired.env; the secrets (TUNNEL_TOKEN,
 # COMMUNITY_TOKEN) are put there by cloud-init or by hand. See example.env.
 name: s1d1
