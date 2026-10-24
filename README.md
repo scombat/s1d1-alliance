@@ -26,7 +26,7 @@ Nothing runs there that is not in this repository, and nothing in this repositor
                            Cloudflare Tunnel              GCS "raw" (EU, 3 days)
                          ┌─────────┴─────────┐                     │ object created
                          ▼                   ▼                     ▼ Eventarc
-                  Hetzner cax11: tantive homelab: tantive    Cloud Run: GLiNER + regex
+                  Hetzner: tantive     homelab: tantive    Cloud Run: GLiNER + regex
                          └──── captures ─────┘                     │
                                sent to /ingest                     ▼
                                                           R2 "clean" (EU, kept)

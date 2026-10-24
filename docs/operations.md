@@ -106,7 +106,10 @@ Created by Terraform (`hetzner.tf`): a `cax11` Arm server with a firewall that h
 stopped and masked by cloud-init. It writes `/opt/s1d1/.env` (0600) from cloud-init, installs cosign and the timer, and
 follows `node/desired.env` on `main` by itself. To look inside, use the Hetzner Console (web VNC) of the server. A node
 you cannot repair is replaced: `terraform apply -replace=hcloud_server.node`. If the apply fails for lack of Arm
-capacity, change `hcloud_location` (`fsn1`, `nbg1`, `hel1`) or retry later.
+capacity, change `hcloud_location` (`fsn1`, `nbg1`, `hel1`: EU only, on purpose) or retry later. If CAX stays
+unavailable, set `hcloud_server_type` to a shared x86 type with 4 GB of RAM: `cx23` (2 vCPU, 40 GB) or `cpx22`
+(2 AMD vCPU, 80 GB), listed by Hetzner for `nbg1` and `hel1`; the image and the cloud-init follow the architecture.
+The root password Hetzner e-mails only works on the web console (SSH is masked): change it at the first console login.
 
 ### Homelab
 

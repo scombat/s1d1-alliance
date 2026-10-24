@@ -62,8 +62,8 @@ terraform validate
 | `github_repository` | no | `scombat/s1d1-alliance` | the repository whose `main` branch may push images |
 | `github_repository_owner_id` | no | empty | optional numeric id of the GitHub owner, added to the federation condition |
 | `hcloud_token` | yes | none | API token (Read & Write) of the Hetzner Cloud project that holds the node |
-| `hcloud_location` | no | `nbg1` | `fsn1`, `nbg1` or `hel1`: the EU locations that offer Arm (CAX) servers |
-| `hcloud_server_type` | no | `cax11` | Arm (Ampere), 2 vCPU, 4 GB RAM, 40 GB disk: see "Hetzner node" |
+| `hcloud_location` | no | `nbg1` | `fsn1`, `nbg1` or `hel1`: the EU locations only, on purpose (the node stays in the EU) |
+| `hcloud_server_type` | no | `cax11` | Arm (Ampere), 2 vCPU, 4 GB RAM, 40 GB disk; x86 fallback `cx23` or `cpx22`: see "Hetzner node" |
 
 The GCS values of the ingest Worker (`RAW_BUCKET`, `GCS_HMAC_ID`, `GCS_HMAC_SECRET`) are not variables: they are
 `local.raw_bucket_name`, `local.gcs_hmac_id` and `local.gcs_hmac_secret`, defined in `gcp.tf` from the raw bucket and
@@ -230,15 +230,20 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
   (tunnel, ghcr.io, raw.githubusercontent.com, apt). The compose publishes no port.
 - **No SSH key, no password login.** Without `ssh_keys`, Hetzner e-mails a root password. The cloud-init sets
   `ssh_pwauth: false` and stops and masks `ssh.service` and `ssh.socket`, so that password is of no use over the
-  network; it still opens a session on the web console. To look inside the node, use the Hetzner Console (the
-  server, "Console": web VNC) with that password, or reset it from the same page. A node you cannot repair is
+  network; it still opens a session on the web console. Change that password at the first
+  console login or reset it from the Console. To look inside the node, use the
+  Hetzner Console (the server, "Console": web VNC) with that password. A node you cannot repair is
   replaced (`terraform apply -replace=hcloud_server.node`): it holds no state that matters (the capture folder is kept
   two days).
 - **No drift on a running node.** `lifecycle { ignore_changes = [user_data, image] }`: a newer Ubuntu image or an edited
   cloud-init does not replace the server. The node follows `desired.env` by itself.
 - **Arm capacity.** The apply can fail on the server when Hetzner has no CAX capacity in the location (the product page
   sometimes shows the CAX plans as unavailable). The firewall is created anyway; set `hcloud_location` to another of
-  the three EU locations and apply again, or retry later.
+  the three EU locations and apply again, or retry later. If CAX (Arm) stays unavailable, set `hcloud_server_type` to a shared x86 type with 4 GB of RAM: `cx23`
+  (2 vCPU, 40 GB, Cost-Optimized; Hetzner's current smallest x86 type, successor of `cx22`) or `cpx22` (2 AMD vCPU, 80 GB,
+  Regular Performance). Hetzner's product pages list both for `nbg1` and `hel1` (not `fsn1`); check the Console for
+  the location you choose. Nothing else changes: the image follows the architecture of the type, and the cloud-init
+  carries the cosign checksums for aarch64 and x86_64.
 - **API token.** In the Hetzner Console, open the project, Security, API tokens, "Generate API token" with the
   permission **Read & Write**, and put it in the sensitive workspace variable `hcloud_token`. A token belongs to one
   project: the node, its firewall and its IPs live in that project.

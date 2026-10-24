@@ -10,18 +10,18 @@ variable "hcloud_token" {
 variable "hcloud_location" {
   type        = string
   default     = "nbg1"
-  description = "Hetzner location of the node: an EU location that offers the Arm (CAX) server types."
+  description = "Hetzner location of the node. Limited to the EU locations on purpose (decision: the data stays in the EU): fsn1 (Falkenstein), nbg1 (Nuremberg), hel1 (Helsinki)."
 
   validation {
     condition     = contains(["fsn1", "nbg1", "hel1"], var.hcloud_location)
-    error_message = "hcloud_location must be fsn1 (Falkenstein), nbg1 (Nuremberg) or hel1 (Helsinki): the EU locations with Arm (CAX) servers."
+    error_message = "hcloud_location must be fsn1 (Falkenstein), nbg1 (Nuremberg) or hel1 (Helsinki): the node stays in the EU."
   }
 }
 
 variable "hcloud_server_type" {
   type        = string
   default     = "cax11"
-  description = "Server type. cax11 is Arm (Ampere), 2 vCPU, 4 GB RAM, 40 GB disk. The image is chosen for the architecture of the type."
+  description = "Server type. Default cax11: Arm (Ampere), 2 vCPU, 4 GB RAM, 40 GB disk. If CAX (Arm) stays unavailable, use a shared x86 type with 4 GB: cx23 (2 vCPU, 40 GB, Cost-Optimized) or cpx22 (2 AMD vCPU, 80 GB, Regular Performance), both listed for nbg1 and hel1 (check the Console for the location). The image follows the architecture of the type and the cloud-init handles aarch64 and x86_64."
 }
 
 # No `rule` block at all: once a firewall is applied to a server, inbound traffic that matches no rule is blocked,
