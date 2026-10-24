@@ -5,6 +5,8 @@ name: ci
 on:
   push:
   pull_request:
+  # Re-run the image publication by hand (Actions, ci, Run workflow, on main) once the federation exists.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -106,3 +108,104 @@ jobs:
         run: |
           terraform init -backend=false
           terraform validate
+
+  node:
+    name: node
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # POSIX sh with fake cosign, curl and docker: nothing to install on the runner (sh, awk, sed, cmp, diff).
+      - name: Test update.sh
+        if: hashFiles('node/test/test_update.sh') != ''
+        run: sh node/test/test_update.sh
+
+      - name: Test the cloud-init copies
+        if: hashFiles('node/test/test_cloud_init.sh') != ''
+        run: sh node/test/test_cloud_init.sh
+
+  # Builds the anonymizer image and pushes it to Artifact Registry, with no stored key: GitHub's OIDC token is
+  # exchanged for the ci-publisher service account (terraform/wif.tf accepts only refs/heads/main of this repository).
+  # It never commits: the digest is printed in the job summary, to be pasted into terraform/images.auto.tfvars by a PR.
+  # Skipped until the three repository variables exist (Settings, Secrets and variables, Actions, Variables):
+  #   GCP_WIF_PROVIDER = terraform output ci_workload_identity_provider
+  #   GCP_CI_SA        = terraform output ci_publisher_service_account
+  #   GCP_PROJECT      = the Google Cloud project id
+  # None of them is a secret.
+  anonymizer-image:
+    name: anonymizer-image
+    needs: [anonymizer]
+    if: >-
+      github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && vars.GCP_WIF_PROVIDER != '' && vars.GCP_CI_SA != '' && vars.GCP_PROJECT != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      IMAGE: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT }}/s1d1/anonymizer
+    steps:
+      - name: Check out with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A push builds only when anonymizer/ changed in it; a manual run always builds. No third-party action: git diff.
+      - name: Did anonymizer/ change?
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" HEAD -- anonymizer/; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "anonymizer/ did not change in this push: no image is built." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to Google Cloud with workload identity
+        if: steps.changed.outputs.build == 'true'
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SA }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        if: steps.changed.outputs.build == 'true'
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin europe-west1-docker.pkg.dev
+
+      - name: Build and push (linux/amd64)
+        if: steps.changed.outputs.build == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --provenance=false \
+            --tag "$IMAGE:$SHA" --metadata-file "$RUNNER_TEMP/build.json" --push anonymizer
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/build.json")
+          case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "no digest" >&2; exit 1 ;; esac
+          {
+            echo "### Anonymizer image pushed"
+            echo
+            echo "Tag \`$SHA\`, digest \`$digest\`. Nothing was committed. Paste this line into \`terraform/images.auto.tfvars\` in a pull request:"
+            echo
+            echo '```'
+            echo "anonymizer_image = \"$IMAGE@$digest\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

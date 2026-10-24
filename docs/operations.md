@@ -1,0 +1,181 @@
+# Operations guide
+
+How to bring up and run `s1d1.qoo.gy`. Everything below is done by the maintainer, by hand; the repository holds no
+secret. Component details live next to the code: [terraform/README.md](../terraform/README.md),
+[node/README.md](../node/README.md), [anonymizer/README.md](../anonymizer/README.md),
+[workers/site/README.md](../workers/site/README.md), [workers/ingest/README.md](../workers/ingest/README.md).
+
+## 1. Manual prerequisites (decision 50)
+
+Done once, outside Terraform:
+
+1. **Cloudflare**: the account, the zone `qoo.gy`, R2 enabled on the account, and a provider token with the
+   permissions listed in `terraform/README.md` ("Token permissions").
+2. **Google Cloud**: a project with billing linked; `serviceusage.googleapis.com` and
+   `cloudresourcemanager.googleapis.com` enabled; a service account for HCP with the roles listed in
+   `terraform/README.md` ("Manual steps", item 3), including a billing role **on the billing account**. It is the most
+   powerful credential of the project: keep it out of the repository and rotate it.
+3. **HCP Terraform**: an organisation (the workspace is created below).
+4. **Oracle Cloud**: an account whose home region is in the EU, an API key for a user with `manage` rights on
+   `virtual-network-family` and `instance-family` in the compartment.
+5. **GitHub**: the repository `scombat/s1d1-alliance`. Terraform creates the federation that lets its `main` branch push
+   the anonymizer image; the three repository variables of section 3 are set by hand.
+
+## 2. HCP Terraform workspace
+
+1. Create the workspace `s1d1-alliance` (the name in `terraform/versions.tf`), VCS-driven, connected to the repository.
+2. Settings, General: **Terraform Working Directory = `terraform`**, and keep the **VCS root = the repository root**.
+   The configuration reads `../workers/*` and `../site`; a workspace that uploads only `terraform/` fails at plan.
+3. Set the workspace variables below. Sensitive ones are marked as such in HCP (write-only afterwards).
+   Google credentials: `GOOGLE_CREDENTIALS` (environment variable, sensitive) or dynamic provider credentials.
+
+| variable | sensitive | note |
+|---|---|---|
+| `cloudflare_account_id` | no | |
+| `cloudflare_zone_id` | no | zone `qoo.gy` |
+| `cloudflare_api_token` | **yes** | |
+| `gcp_project` | no | also names the raw bucket `<project>-s1d1-raw` |
+| `billing_account` | no | |
+| `budget_currency` | no | must equal the billing account currency (default `EUR`) |
+| `anonymizer_image` | no | not set by hand: it comes from `images.auto.tfvars` (section 3) |
+| `oci_tenancy_ocid`, `oci_user_ocid`, `oci_fingerprint`, `oci_compartment_ocid` | no | |
+| `oci_private_key` | **yes** | PEM content of the API key, not a path |
+| `GOOGLE_CREDENTIALS` | **yes** | environment variable, if not using dynamic credentials |
+
+Optional, with defaults: `deploy_version`, `status_commit`, `tantive_image`, `status_model`, `maintenance`, `cache_ttl`,
+`gcp_region`, `budget_amount`, `github_repository`, `github_repository_owner_id` (set it: the numeric owner id),
+`oci_region`, `oci_availability_domain_index`.
+
+## 3. First apply, in this order
+
+The Cloud Run service needs an image that already exists, and the image needs the registry and the federation. So:
+
+1. **Registry and federation first** (a targeted run, from a CLI-driven run started at the repository root, or a plan
+   with `-target` in the workspace):
+   `terraform -chdir=terraform apply -target=google_artifact_registry_repository.s1d1 -target=google_service_account.ci_publisher -target=google_iam_workload_identity_pool_provider.github -target=google_artifact_registry_repository_iam_member.ci_publisher_writes -target=google_service_account_iam_member.ci_publisher_from_github`
+2. **Repository variables** (GitHub, Settings, Secrets and variables, Actions, Variables; none is a secret):
+   `GCP_WIF_PROVIDER` = `terraform output -raw ci_workload_identity_provider`,
+   `GCP_CI_SA` = `terraform output -raw ci_publisher_service_account`, `GCP_PROJECT` = the project id.
+3. **Push the image**: Actions, `ci`, "Run workflow" on `main` (the `anonymizer-image` job otherwise runs only on a push to
+   `main` that changes `anonymizer/`). It builds `linux/amd64`, pushes
+   `europe-west1-docker.pkg.dev/<project>/s1d1/anonymizer:<commit sha>` and prints, in the job summary, the line to
+   paste. It never commits.
+4. **Set the digest**: in a pull request, create `terraform/images.auto.tfvars` with that line:
+   `anonymizer_image = "europe-west1-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>"`.
+   (`*.auto.tfvars` is the one tfvars form git keeps.) A tag without a digest is refused by the variable.
+5. **Full apply** of the workspace. Every later image goes the same way: merge to `main`, read the summary, open a PR
+   with the new digest, apply.
+6. The tunnel exists with no connector: start the nodes (section 5). Fill `status_commit`, `tantive_image` and
+   `status_model` for `/status.json` when the node digests are known.
+
+## 4. Cloudflare, by hand (Terraform cannot)
+
+- **Route failure mode** (`cloudflare_workers_route` has no such field). Dashboard: Workers & Pages, the Worker,
+  Settings, Domains & Routes, the route, "Failure mode".
+  - `s1d1.qoo.gy/*` (the `s1d1-site` Worker): **fail open**. If the Worker cannot run, the request goes to the
+    origin without the allow-list, the cache or the maintenance switch; accepted for the site, and the tunnel's own
+    ingress (`terraform/README.md`) still lists only the API paths and answers 404 for the rest.
+  - `s1d1.qoo.gy/ingest` (the `s1d1-ingest` Worker): **fail closed**. Failing open would send `/ingest` to a
+    tunnel that does not serve it; closed returns a Cloudflare 1027 page and tantive retries.
+  Check both after every apply (open question 4 of docs/26).
+- **workers.dev**: both Workers have it disabled by Terraform. If the apply fails on those resources because the account
+  has no workers.dev subdomain, see `terraform/README.md`.
+- **Cloudflare Access** (optional, for `/metrics`, section 8): an Access application on the tunnel hostname you choose.
+
+## 5. Nodes
+
+### Oracle Always Free node
+
+Created by Terraform (`oci.tf`), no SSH, no inbound port. It writes `/opt/s1d1/.env` (0600) from cloud-init, installs
+cosign and the timer, and follows `node/desired.env` on `main` by itself. A node you cannot repair is replaced:
+`terraform apply -replace=oci_core_instance.node`. If the apply says "Out of host capacity", change
+`oci_availability_domain_index` or retry later.
+
+### Homelab
+
+1. `mkdir -p /opt/s1d1` and copy `node/compose.yaml`, `node/update.sh`, `node/s1d1-update.service`,
+   `node/s1d1-update.timer` there.
+2. `cp node/example.env /opt/s1d1/.env && chmod 0600 /opt/s1d1/.env`, then fill the two secrets from the workspace
+   outputs, read on a trusted machine and never written to chat or a ticket:
+   `TUNNEL_TOKEN` = `terraform output -raw tunnel_token`, `COMMUNITY_TOKEN` = `terraform output -raw community_token`.
+   Leave the two `*_IMAGE` lines: `update.sh` rewrites them from `desired.env`.
+3. Install cosign (version and checksum as in `node/cloud-init.yaml.tftpl`), `docker.io` and `docker-compose-v2`.
+4. Install the units from `node/` into `/etc/systemd/system/`, then `systemctl daemon-reload` and
+   `systemctl enable --now s1d1-update.timer`. First run now: `/opt/s1d1/update.sh /opt/s1d1/.env <raw URL of desired.env>`
+   (the URL is the one in `s1d1-update.service`:
+   `https://raw.githubusercontent.com/scombat/s1d1-alliance/main/node/desired.env`).
+5. Check: `docker compose -f /opt/s1d1/compose.yaml --env-file /opt/s1d1/.env ps`, and `journalctl -u s1d1-update`.
+   `desired.env` carries placeholder digests until tantive 0.8.0 is published; a placeholder fails the cosign check,
+   so the node starts nothing, which is the intended behaviour.
+
+## 6. Emergency stop: `MAINTENANCE`
+
+Set the workspace variable `maintenance` to `1` and apply. `/api/*` and `/ingest` answer 503
+`{"error": "maintenance"}` with `Retry-After: 3600`; the landing stays up, and nothing is served from the cache during
+maintenance. Back to `0` and apply to resume. tantive retries a 503 from `/ingest`, so nothing is lost on the nodes
+within their two-day capture window. To stop the anonymizer itself too, set its Cloud Run maximum instances to 0 (the
+raw bucket keeps filling for at most 3 days, then deletes; see the next section).
+
+## 7. Daily check of the raw bucket (decision 52)
+
+The raw bucket deletes at 3 days. **Nothing may be older than 4 days**; an older object means the lifecycle rule or the
+anonymizer is broken and raw prompts are being kept too long.
+
+```
+gcloud storage ls -l -r "gs://<project>-s1d1-raw/raw/" \
+  | awk -v limit="$(date -u -d '4 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-4d +%Y-%m-%dT%H:%M:%SZ)" \
+      '$3 ~ /^gs:/ && $2 < limit { print "TOO OLD:", $2, $3; bad=1 } END { exit bad }'
+```
+
+Exit status 0 and no output: fine. Otherwise look at the Eventarc trigger and Cloud Run errors first. (`gcloud storage ls -l` prints size, creation time and URL; run it once by hand
+to confirm the format of your `gcloud` version.) Also glance at the
+clean side: an object `clean/YYYY/MM/DD/<uuid>.ndjson` must exist for each recent raw one.
+
+## 8. Reading `/metrics` (decision 49)
+
+`/api/metrics` answers 404 on the public name, by design (closed list). Read the metrics only from the node itself
+(the Compose file publishes no port, so use `docker compose exec` into the tantive container, or from another container on
+the Compose network), or through a Cloudflare Access application in front of a separate private hostname of the tunnel. Never open a public path for them.
+
+## 9. Smoke tests after the first deploy
+
+These were verified against documentation only; the first deploy is where they are proven.
+
+1. **Same-zone fetch**: from the `s1d1-site` Worker, `fetch("https://s1d1.qoo.gy/api/v1/models")` must reach the tunnel
+   (the origin), not loop back into the Worker. `x-s1d1-cache` shows `MISS` then `HIT` on a repeated `POST`.
+2. **Worker module edits show in plan**: change a non-index module (for example `workers/site/src/api.js`) and
+   check that `terraform plan` shows a diff on the script.
+3. **R2 EU endpoint write**: the anonymizer writes `clean/...` to `r2_endpoint` (the `eu` jurisdiction endpoint); a
+   test object appears in `s1d1-clean`.
+4. **GCS PUT from the ingest Worker**: `POST /ingest` with the fixtures of `contract/fixtures/` gives 202, and a
+   `raw/YYYY/MM/DD/<uuid>.ndjson` object appears.
+5. **Eventarc reaches the `INTERNAL_ONLY` Cloud Run service**: that object produces a clean one within a minute or two. If
+   Cloud Run logs show 403/404 deliveries, see "Ingress INTERNAL_ONLY and Eventarc" in `terraform/README.md` for the
+   fallback.
+6. **Rate limit counts the Worker subrequest**: 101 requests in 10 s to `/api/v1/models` from one IP get blocked, and
+   the count is not doubled by the Worker's own subrequest to the zone.
+7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
+   `container/memory/utilizations`) and compare with the 4 GiB limit; adjust only on that reading.
+
+## 10. Known corpus cost: script coverage and the drop rule
+
+The anonymizer masks only the scripts it has been shown to cover. A prompt holding a single letter in an uncovered script
+(Cyrillic, Japanese, Devanagari, Thai and any script not tested) is **dropped, not stored**, and counted as
+`dropped_uncovered_script`. The clean corpus is therefore biased toward Latin-script prompts. Which scripts are covered,
+the evidence, and the exact rule are in [anonymizer/README.md](../anonymizer/README.md#scripts-covered-or-dropped). This is
+a deliberate privacy-over-coverage choice: say it when presenting the corpus.
+
+## 11. Questions still open
+
+From docs/26 section 5, after the checks of tasks 9 and 10 (the full text is in the s1d1-model-router repository):
+
+- **Question 4, route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
+  apply.
+- **Live behaviours not provable offline**: the six smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
+  Eventarc, R2 EU write, GCS PUT, rate limit with the subrequest, peak memory).
+- **Eventarc retries**: the policy cannot be tuned in this provider version (`max_attempts = 1` only, no dead letter);
+  a permanently failing object can be redelivered for 24 h. Watch Cloud Run's error rate.
+- **Legal texts**: the three French pages are templates until the lawyer has written and reviewed them; the licence of this
+  repository is the maintainer's decision.
+- **tantive 0.8.0 digests**: `node/desired.env` and `node/example.env` carry placeholders until it is published.
+- **Cache lifetime**: `CACHE_TTL` is 86 400 s by the builder's choice (docs/26 section 4); revisit with real traffic.
