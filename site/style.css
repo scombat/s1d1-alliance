@@ -19,3 +19,4 @@ label.gate input{margin-top:.35rem}
 [hidden]{display:none!important}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem 1rem}dd{margin:0;overflow-wrap:anywhere}
 footer{color:var(--muted);font-size:.9rem}
+table{width:100%;border-collapse:collapse;margin:.5rem 0}th,td{border:1px solid var(--line);padding:.4rem .5rem;text-align:left;vertical-align:top}

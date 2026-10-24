@@ -9,7 +9,80 @@
 <body>
 <main>
 <h1>Conditions d'utilisation (v1)</h1>
-<p>À rédiger et faire relire par le juriste.</p>
+<p class="lead">Version 1, en vigueur depuis le 25 octobre 2026. Adresse permanente de cette version :
+<code>https://s1d1.qoo.gy/conditions/v1/</code>.</p>
+
+<h2>1. Objet</h2>
+<p>Ces conditions régissent l'usage du service s1d1 accessible à <code>https://s1d1.qoo.gy</code> (le « service »),
+édité par une personne physique agissant à titre non professionnel (l'« éditeur », voir les
+<a href="/mentions-legales/">mentions légales</a>). Le service classe
+un texte (un « prompt ») : il renvoie un score de complexité, une tâche et un besoin d'outils, pour aider un routeur de
+modèles de langage à choisir le modèle adapté. Il est gratuit.</p>
+
+<h2>2. Acceptation</h2>
+<p>Vous acceptez ces conditions en cochant la case prévue sur la page d'accueil. <strong>Utiliser l'API du service, par
+quelque moyen que ce soit (navigateur, code, passerelle, agent logiciel), vaut également acceptation de ces
+conditions</strong>, y compris lorsque l'adresse de l'API a été obtenue autrement que par la page d'accueil. Si vous
+n'acceptez pas ces conditions, n'utilisez pas le service : la démonstration qui fonctionne entièrement dans votre
+navigateur (<a href="https://huggingface.co/spaces/scombat/s1d1-router-demo">s1d1-router-demo</a>) et l'auto-hébergement
+du serveur (<a href="https://github.com/scombat/s1d1-tantive">s1d1-tantive</a>) n'envoient rien à l'éditeur.</p>
+<p>Si vous configurez un agent logiciel ou un système automatisé pour utiliser le service, vous restez responsable de
+son usage et vous vous engagez à informer la ou les personnes pour le compte desquelles il agit.</p>
+
+<h2>3. Contribution des textes envoyés</h2>
+<p>Le service est gratuit parce qu'il est communautaire : <strong>tout texte envoyé au service est conservé et sert à
+améliorer et ré-entraîner le modèle s1d1.</strong></p>
+<p>En envoyant un texte, vous concédez à l'éditeur, à titre gratuit, non exclusif, mondial, pour toute la durée des
+droits et de façon <strong>irrévocable</strong>, le droit de reproduire, conserver, anonymiser, modifier, analyser et
+utiliser ce texte pour entraîner, évaluer et améliorer des modèles, et de distribuer les modèles qui en sont issus.
+L'éditeur ne publie pas les textes eux-mêmes dans un jeu de données public sans une décision distincte, et seulement
+sous leur forme anonymisée.</p>
+<p>Vous garantissez avoir le droit d'envoyer le texte et de concéder ce droit. Ce qui a été envoyé ne peut pas être
+retiré ensuite : le service ne garde aucun compte ni identifiant qui permettrait de rattacher un texte à vous, et les
+textes sont anonymisés puis intégrés à un corpus.</p>
+
+<h2>4. Données personnelles</h2>
+<p><strong>N'envoyez pas de données personnelles</strong> (noms, adresses, numéros de téléphone, adresses e-mail,
+identifiants, données de santé, etc.), ni de secrets (mots de passe, clés d'API, jetons). Le service supprime
+automatiquement les données personnelles et les secrets qu'il détecte avant de conserver un texte, et écarte les textes
+qu'il ne sait pas vérifier, mais aucune détection n'est parfaite. Le traitement des données est décrit dans la
+<a href="/confidentialite/v1/">politique de confidentialité</a>.</p>
+
+<h2>5. Contributions par une instance auto-hébergée</h2>
+<p>Une instance de s1d1-tantive peut, si son exploitant l'active, envoyer ses captures au point d'ingestion du service
+(<code>/ingest</code>). L'exploitant qui active cet envoi accepte ces conditions pour les textes envoyés et
+<strong>garantit disposer du droit de transmettre les textes de ses propres utilisateurs</strong> et de concéder les
+droits de l'article 3, notamment en les ayant informés.</p>
+
+<h2>6. Usages interdits</h2>
+<p>Il est interdit d'utiliser le service pour un usage illicite, d'y envoyer des contenus illicites, de tenter de porter
+atteinte à sa sécurité ou à sa disponibilité, de contourner ses limites de débit, ou d'envoyer volontairement des textes
+destinés à dégrader le modèle. L'éditeur peut bloquer tout accès qui ne respecte pas ces conditions.</p>
+
+<h2>7. Disponibilité et limites</h2>
+<p>Le service est fourni gratuitement, « en l'état », sans garantie de disponibilité, de résultat ou d'adéquation à un
+usage particulier. Ses réponses sont des estimations automatiques et peuvent être fausses : ne vous en servez pas pour
+une décision qui doit être juste sur un seul texte. Le service applique des limites de débit et peut répondre
+« 429 » ; il peut être suspendu, modifié ou arrêté à tout moment.</p>
+<p>Dans les limites permises par la loi, l'éditeur n'est pas responsable des dommages indirects résultant de l'usage ou
+de l'indisponibilité du service. Rien dans ces conditions ne limite les droits que la loi reconnaît impérativement aux
+consommateurs.</p>
+
+<h2>8. Logiciels et modèle</h2>
+<p>Le modèle <a href="https://huggingface.co/scombat/s1d1-router">s1d1-router</a> et le code de
+<a href="https://github.com/scombat/s1d1-alliance">s1d1-alliance</a> sont publiés sous licence Apache-2.0 ; le serveur
+<a href="https://github.com/scombat/s1d1-tantive">s1d1-tantive</a> est publié sous Business Source License 1.1. Ces
+licences régissent leur réutilisation ; les présentes conditions régissent l'usage du service hébergé.</p>
+
+<h2>9. Évolution des conditions</h2>
+<p>Une nouvelle version de ces conditions est publiée à une nouvelle adresse (<code>/conditions/v2/</code>, etc.) et
+s'applique aux textes envoyés après sa publication. Chaque texte conservé porte le numéro de la version en vigueur au
+moment de son envoi ; la présente version reste en ligne à son adresse.</p>
+
+<h2>10. Droit applicable et contact</h2>
+<p>Ces conditions sont soumises au droit français. Sous réserve des règles impératives applicables aux consommateurs,
+tout litige relève des tribunaux français compétents. Contact :
+<a href="mailto:steve@qoo.gy">steve@qoo.gy</a>.</p>
 </main>
 </body>
 </html>

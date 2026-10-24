@@ -9,7 +9,82 @@
 <body>
 <main>
 <h1>Politique de confidentialité (v1)</h1>
-<p>À rédiger et faire relire par le juriste.</p>
+<p class="lead">Version 1, en vigueur depuis le 25 octobre 2026. Elle décrit ce que le service s1d1
+(<code>https://s1d1.qoo.gy</code>) fait des données qu'il reçoit. Tout le code qui les traite est public :
+<a href="https://github.com/scombat/s1d1-alliance">s1d1-alliance</a>.</p>
+
+<h2>1. Responsable du traitement</h2>
+<p>L'éditeur du service, personne physique agissant à titre non professionnel (voir les
+<a href="/mentions-legales/">mentions légales</a>). Contact pour toute question ou demande relative à vos données :
+<a href="mailto:steve@qoo.gy">steve@qoo.gy</a>.</p>
+
+<h2>2. Le principe</h2>
+<p>Le service n'a ni compte, ni cookie, ni identifiant d'utilisateur. Il reçoit des textes (des « prompts ») et les
+conserve pour ré-entraîner le modèle s1d1, comme l'indiquent les <a href="/conditions/v1/">conditions d'utilisation</a>.
+<strong>Vous ne devez pas y envoyer de données personnelles.</strong> Comme un texte peut malgré tout en contenir, le
+service est conçu pour que <strong>rien de personnel ne soit conservé durablement</strong> : les textes bruts ne vivent
+que quelques jours, puis seule une version anonymisée est gardée.</p>
+
+<h2>3. Données traitées, finalités et bases légales</h2>
+<table>
+<thead><tr><th>Données</th><th>Pourquoi</th><th>Base légale</th></tr></thead>
+<tbody>
+<tr><td>Le texte envoyé à l'API, la décision du modèle, la version du modèle et des conditions, le format d'appel et
+la date</td><td>Répondre à la requête ; constituer un corpus anonymisé pour améliorer le modèle</td><td>L'exécution des
+conditions d'utilisation acceptées, et l'intérêt légitime de l'éditeur à améliorer un modèle ouvert</td></tr>
+<tr><td>L'adresse IP, de façon transitoire</td><td>Acheminer la requête et appliquer les limites de débit contre les
+abus</td><td>L'intérêt légitime de l'éditeur à protéger le service</td></tr>
+<tr><td>Le pays (déduit par Cloudflare) et la date d'une visite de la page d'accueil</td><td>Compter les visites, sans
+rien de plus</td><td>L'intérêt légitime ; cette donnée n'identifie personne</td></tr>
+</tbody>
+</table>
+<p><strong>Ce qui n'est jamais enregistré par le service :</strong> l'adresse IP, les en-têtes de la requête, un cookie
+ou un identifiant de navigateur. La réponse d'un modèle de langage n'est jamais reçue : le service ne voit que le texte
+à classer.</p>
+
+<h2>4. Où et combien de temps</h2>
+<ul>
+<li><strong>Le classement</strong> a lieu en mémoire, sur un serveur de l'hébergeur Hetzner en Allemagne ou sur un
+serveur exploité par l'éditeur dans l'Union européenne. Chaque serveur garde localement les textes en attente d'envoi
+au plus <strong>2 jours</strong>.</li>
+<li><strong>Les textes bruts</strong> sont stockés chiffrés chez Google Cloud, en Belgique (région
+<code>europe-west1</code>), et supprimés automatiquement au bout de <strong>3 jours</strong> ; la suppression étant
+asynchrone, comptez <strong>au plus 4 jours</strong>. Personne ne les consulte à la main.</li>
+<li><strong>L'anonymisation</strong> a lieu chez Google Cloud, en Belgique : les noms, adresses, numéros de téléphone,
+adresses e-mail, identifiants, numéros de carte et IBAN, adresses IP et secrets (mots de passe, clés d'API) détectés
+sont remplacés par des marqueurs comme <code>[PERSON]</code> ou <code>[EMAIL]</code>. Un texte dans une écriture que
+l'outil ne sait pas vérifier (par exemple le cyrillique ou le japonais) est <strong>écarté et jamais conservé</strong>.
+La méthode et ses limites sont publiques
+(<a href="https://github.com/scombat/s1d1-alliance/blob/main/anonymizer/README.md">anonymizer/README.md</a>).</li>
+<li><strong>Le corpus anonymisé</strong> est conservé chez Cloudflare (stockage R2, juridiction Union européenne), sans
+limite de durée, puisqu'il ne contient plus de données personnelles.</li>
+<li><strong>Le cache des réponses</strong> garde, 24 heures, la décision du modèle associée à une empreinte du texte,
+jamais le texte lui-même.</li>
+</ul>
+
+<h2>5. Destinataires et sous-traitants</h2>
+<p>Seul l'éditeur accède aux données. Ses sous-traitants sont :</p>
+<ul>
+<li><strong>Cloudflare, Inc.</strong> (États-Unis) : réseau, protection contre les abus, exécution du service à la
+périphérie et stockage du corpus anonymisé. Les requêtes transitent par son réseau mondial ; ce transfert est encadré
+par le cadre de protection des données UE–États-Unis et les clauses contractuelles types de la Commission
+européenne.</li>
+<li><strong>Google Cloud EMEA Limited</strong> (Irlande) : stockage des textes bruts et anonymisation, en Belgique.</li>
+<li><strong>Hetzner Online GmbH</strong> (Allemagne) : un serveur de classement.</li>
+</ul>
+<p>Aucune donnée n'est vendue, ni utilisée à des fins publicitaires.</p>
+
+<h2>6. Vos droits</h2>
+<p>Vous disposez d'un droit d'accès, de rectification, d'effacement, de limitation et d'opposition sur les données
+personnelles qui vous concernent, ainsi que du droit d'introduire une réclamation auprès de la CNIL
+(<a href="https://www.cnil.fr/">cnil.fr</a>). Comme le service ne garde aucun identifiant, il ne peut retrouver un texte
+que si vous en fournissez le contenu exact : écrivez à <a href="mailto:steve@qoo.gy">steve@qoo.gy</a> dans les jours qui
+suivent l'envoi, pendant que le texte brut existe encore. Une fois anonymisé, un texte ne contient plus de donnée
+personnelle vous concernant.</p>
+
+<h2>7. Évolution</h2>
+<p>Une nouvelle version de cette politique est publiée à une nouvelle adresse (<code>/confidentialite/v2/</code>,
+etc.) ; la présente version reste en ligne.</p>
 </main>
 </body>
 </html>
