@@ -59,7 +59,7 @@ resource "cloudflare_workers_script" "site" {
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Ingest Worker: validates NDJSON batches and writes them to the raw GCS bucket.
-# The three GCS values come from locals that gcs_hmac_locals.tf holds until Task 10 defines them in gcp.tf.
+# The three GCS values are locals defined in gcp.tf, from the raw bucket and the HMAC key of ingest-writer.
 # ---------------------------------------------------------------------------------------------------------------------
 resource "cloudflare_workers_script" "ingest" {
   account_id         = var.cloudflare_account_id

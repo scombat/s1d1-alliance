@@ -1,10 +1,11 @@
 # terraform
 
 Infrastructure of the public instance `s1d1.qoo.gy`, in HCP Terraform (workspace `s1d1-alliance`).
-This folder holds the Cloudflare part (tunnel, DNS, Workers, routes, rate limit, R2); the Google Cloud part (raw
-bucket, service accounts, anonymizer) is `gcp.tf`, added by the next task.
+This folder holds the Cloudflare part (tunnel, DNS, Workers, routes, rate limit, R2) and the Google Cloud part (raw
+bucket, service accounts, anonymizer on Cloud Run, Eventarc, budget, CI identity): `gcp.tf`, `budget.tf`, `wif.tf`.
 
-Providers are pinned exactly: `cloudflare/cloudflare = 5.28.1`, `hashicorp/random = 3.9.1`. The lock file
+Providers are pinned exactly: `cloudflare/cloudflare = 5.28.1`, `hashicorp/google = 8.8.1`, `hashicorp/random = 3.9.1`
+(no `google-beta`: every resource used is GA). The lock file
 `.terraform.lock.hcl` is committed with the hashes for `linux_amd64` (CI, HCP) and `darwin_arm64` (laptops).
 To add a platform or upgrade: `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`.
 
@@ -50,11 +51,19 @@ terraform validate
 | `status_model` | no | `unknown` | `STATUS_MODEL` of `/status.json` |
 | `maintenance` | no | `0` | `"1"`: `/api/*` and `/ingest` answer 503, the landing stays up |
 | `cache_ttl` | no | `86400` | `CACHE_TTL` in seconds |
+| `gcp_project` | no | none | Google Cloud project id; also names the raw bucket `<project>-s1d1-raw` (bucket names are global) |
+| `gcp_region` | no | `europe-west1` | bucket, Cloud Run, Artifact Registry, secrets, Eventarc trigger |
+| `billing_account` | no | none | billing account id (`000000-000000-000000`) for the budget |
+| `budget_amount` | no | `5` | monthly budget, whole units |
+| `budget_currency` | no | `EUR` | must be the currency of the billing account |
+| `anonymizer_image` | no | none | `<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>`; a tag without a digest is refused |
+| `github_repository` | no | `scombat/s1d1-alliance` | the repository whose `main` branch may push images |
+| `github_repository_owner_id` | no | empty | optional numeric id of the GitHub owner, added to the federation condition |
 
-The GCS values of the ingest Worker (`RAW_BUCKET`, `GCS_HMAC_ID`, `GCS_HMAC_SECRET`) are not variables: they come
-from the raw bucket and the HMAC key that `gcp.tf` creates. Until it exists, `gcs_hmac_locals.tf` holds three empty
-placeholders (`local.raw_bucket_name`, `local.gcs_hmac_id`, `local.gcs_hmac_secret`); `gcp.tf` defines them and
-that file is deleted. **Do not apply before that**: an empty secret binding is refused.
+The GCS values of the ingest Worker (`RAW_BUCKET`, `GCS_HMAC_ID`, `GCS_HMAC_SECRET`) are not variables: they are
+`local.raw_bucket_name`, `local.gcs_hmac_id` and `local.gcs_hmac_secret`, defined in `gcp.tf` from the raw bucket and
+the HMAC key of `ingest-writer`. The R2 credentials of the anonymizer are not variables either: the secrets are made
+from the R2 API token of `cloudflare.tf`.
 
 ## Outputs (all sensitive except `r2_endpoint`)
 
@@ -65,6 +74,10 @@ that file is deleted. **Do not apply before that**: an empty secret binding is r
 | `r2_access_key_id` | S3 access key id of `s1d1-clean`: the id of the API token |
 | `r2_secret_access_key` | S3 secret: the SHA-256 of the API token value |
 | `r2_endpoint` | `https://<account>.eu.r2.cloudflarestorage.com` (EU jurisdiction: a jurisdictional bucket is only reachable on its own endpoint) |
+
+Four outputs of the Google part are not sensitive: `ci_workload_identity_provider` and `ci_publisher_service_account`
+(the two inputs of `google-github-actions/auth`), `artifact_registry_repository` (where to push) and
+`anonymizer_url`. No GCP secret is an output; the HMAC secret only goes to the ingest Worker binding.
 
 Read one with `terraform output -raw community_token` (or in the workspace page).
 
@@ -98,6 +111,71 @@ other modules are `files` entries named by their path (`src/api.js`, `vendor/aws
 imports resolve inside the upload as they do on disk. The static assets are uploaded from `../site` by the
 provider (`assets.directory`); `run_worker_first = ["/", "/status.json", "/api/*"]`.
 
+## What is created on Google Cloud
+
+```
+ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anonymizer --S3--> R2 s1d1-clean
+```
+
+- **APIs** (`google_project_service`, never disabled on destroy): run, eventarc, pubsub, storage, secretmanager,
+  artifactregistry, iam, iamcredentials, sts, billingbudgets, cloudresourcemanager (`iam` is not in the brief but the
+  service accounts need it).
+- **Raw bucket** `<project>-s1d1-raw`, region `europe-west1`, uniform bucket-level access, public access prevention
+  `enforced`, objects deleted at age 3 days. The soft-delete window is set to 0: the default 7 days would keep the
+  deleted raw prompts recoverable for a week more.
+- **Service accounts**, one role each, all on the bucket or secret concerned and none at project level except the two
+  Eventarc ones:
+  - `ingest-writer`: `roles/storage.objectCreator` on the raw bucket only; an HMAC key for the Worker. It can neither
+    read, list, overwrite nor delete.
+  - `anonymizer`: `roles/storage.objectViewer` on the raw bucket only, `roles/secretmanager.secretAccessor` on the
+    two R2 secrets only; it is the identity of the Cloud Run service.
+  - `eventarc-invoker`: `roles/run.invoker` on the service only, `roles/eventarc.eventReceiver` on the project.
+  - `ci-publisher`: `roles/artifactregistry.writer` on the `s1d1` repository only (see below).
+- **Secrets** `r2-access-key-id`, `r2-secret-access-key` in Secret Manager, replicated in `europe-west1` only. The
+  service reads the pinned version, so a rotation (new R2 token) makes a new revision.
+- **Artifact Registry** `s1d1` (Docker). Cleanup keeps the newest 5 versions and deletes the others after 30 days.
+- **Cloud Run** `s1d1-anonymizer`: internal ingress, 0 to 2 instances, 1 vCPU, **4 GiB**, concurrency 1, timeout 3600 s,
+  CPU only during requests, startup CPU boost. Environment: `RAW_BUCKET`, `R2_ENDPOINT`, `R2_BUCKET=s1d1-clean`,
+  `GLINER_MODEL_DIRS` (the image default, spelled out), `GLINER_THRESHOLD=0.5`; `R2_ACCESS_KEY_ID` and
+  `R2_SECRET_ACCESS_KEY` from Secret Manager. Only `eventarc-invoker` may invoke it: there is no `allUsers` binding.
+- **Eventarc** `s1d1-raw-finalized`: `google.cloud.storage.object.v1.finalized` on the raw bucket, delivered to
+  `POST /` of the service with an OIDC token of `eventarc-invoker`. The GCS service agent has
+  `roles/pubsub.publisher` on the project (it publishes the bucket events).
+- **Budget** (`budget.tf`): 5 EUR a month on this project, alerts at 50, 90 and 100 % of the current spend, emailed to
+  the billing account administrators and users (Cloud Billing's default recipients). It alerts and never stops anything.
+- **Workload Identity Federation** (`wif.tf`): pool `github`, OIDC provider `github-main` (issuer
+  `https://token.actions.githubusercontent.com`). The condition is
+  `assertion.repository == "<github_repository>" && assertion.ref == "refs/heads/main"`, plus the numeric owner id when
+  `github_repository_owner_id` is set (GitHub advises it: a name can be released and re-registered by someone else).
+  `ci-publisher` can be impersonated by `principalSet .../attribute.repository/<github_repository>` only.
+
+### Ingress `INTERNAL_ONLY` and Eventarc
+
+Cloud Run accepts Eventarc and Pub/Sub subscriptions under the "internal" ingress setting, on two conditions stated by
+the documentation: the trigger is in the same project (or VPC Service Controls perimeter) as the service, and it calls
+the default `run.app` URL, not a custom domain (https://docs.cloud.google.com/run/docs/securing/ingress). Both hold
+here, so the service uses `INGRESS_TRAFFIC_INTERNAL_ONLY`. Consequences: `default_uri_disabled` must stay `false`
+(Eventarc uses that URL), and a request from the internet is refused by Google's front end whatever its token.
+This is checked against the documentation, not against a live project: the first apply is where it is proven. If the
+trigger shows delivery failures with 403/404 in Cloud Run's logs, that is the first thing to look at; the fallback
+is `INGRESS_TRAFFIC_ALL` with the same IAM (still no public invoker).
+
+### Retries
+
+`google_eventarc_trigger` accepts a `retry_policy` with `max_attempts = 1` only, and has no dead-letter field, so none is
+set. Eventarc then uses its default: the Pub/Sub subscription it manages retries every non-2xx answer with a backoff
+from 10 s to 600 s and keeps the message 24 h (https://docs.cloud.google.com/eventarc/docs/retry-events). The
+anonymizer already answers 204 to every event that can never succeed (wrong name, wrong bucket, bad body), so only a
+real failure (storage, configuration, a broken model) is retried. The cost of an object that fails for good is at most
+about 150 deliveries in the 24 h, each one possibly loading the models: watch Cloud Run's error rate. To change the
+policy or add a dead-letter topic, import the subscription (`terraform state show google_eventarc_trigger.raw_finalized`
+gives its name) into a `google_pubsub_subscription` with `ignore_changes = [push_config]`; the documentation above
+describes it.
+
+The subscription's acknowledgement deadline is not configurable here either. If an object takes longer to clean than
+that deadline, Pub/Sub may deliver it again while the first run goes on; the clean object is written under the same key,
+so the second run replaces it and nothing is duplicated, only compute is spent.
+
 ## Token permissions (`cloudflare_api_token`)
 
 Create the provider token in the dashboard with the permissions that the provider documents for each resource:
@@ -117,8 +195,19 @@ Create the provider token in the dashboard with the permissions that the provide
    value after each apply (open question 4 of docs/26).
 2. **Tunnel connector.** The tunnel exists after the apply, with no connector: the nodes start `cloudflared` with
    `terraform output -raw tunnel_token`.
-3. **GCP wiring.** Task 10: `gcp.tf` replaces `gcs_hmac_locals.tf`.
-4. **Account.** R2 must be enabled on the account before the first apply.
+3. **Google Cloud bootstrap, by hand, once.** A project with billing linked, `serviceusage.googleapis.com` and
+   `cloudresourcemanager.googleapis.com` enabled (Terraform enables the other APIs but needs these two to do it), and a
+   service account for HCP (`GOOGLE_CREDENTIALS` on the workspace, or dynamic provider credentials) with: Project IAM
+   Admin, Service Usage Admin, Storage Admin (it covers the HMAC key), Service Account Admin,
+   Cloud Run Admin, Eventarc Admin, Pub/Sub Admin, Secret Manager Admin, Artifact Registry Administrator, Workload
+   Identity Pool Admin, `iam.serviceAccountUser` on the three runtime accounts, and Billing Account Costs Manager
+   (or Billing Account Administrator) **on the billing account** for the budget. This account is the most powerful
+   credential of the project: keep it out of the repository and rotate it.
+4. **First image.** `anonymizer_image` is required, and the image must exist in Artifact Registry before the Cloud Run
+   service is created. Create the repository first (`terraform apply -target=google_artifact_registry_repository.s1d1`),
+   push the image by digest, then apply the rest with `anonymizer_image` set.
+5. **Currency.** `budget_currency` must equal the billing account's currency; the API rejects the budget otherwise.
+6. **Account.** R2 must be enabled on the account before the first apply.
 
 ## Cloudflare behaviours that matter here
 

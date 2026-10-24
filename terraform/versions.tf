@@ -14,6 +14,10 @@ terraform {
       source  = "cloudflare/cloudflare"
       version = "= 5.28.1"
     }
+    google = {
+      source  = "hashicorp/google"
+      version = "= 8.8.1"
+    }
     random = {
       source  = "hashicorp/random"
       version = "= 3.9.1"
@@ -23,4 +27,14 @@ terraform {
 
 provider "cloudflare" {
   api_token = var.cloudflare_api_token
+}
+
+# Google Cloud: the project and region come from variables. Credentials come from the environment of the HCP
+# workspace (GOOGLE_CREDENTIALS, or dynamic provider credentials), never from the code.
+# user_project_override + billing_project: the Billing Budgets API refuses calls that carry no quota project.
+provider "google" {
+  project               = var.gcp_project
+  region                = var.gcp_region
+  user_project_override = true
+  billing_project       = var.gcp_project
 }
