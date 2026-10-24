@@ -18,9 +18,9 @@ terraform {
       source  = "hashicorp/google"
       version = "= 8.8.1"
     }
-    oci = {
-      source  = "oracle/oci"
-      version = "= 9.11.0"
+    hcloud = {
+      source  = "hetznercloud/hcloud"
+      version = "= 1.70.1"
     }
     random = {
       source  = "hashicorp/random"
@@ -43,11 +43,7 @@ provider "google" {
   billing_project       = var.gcp_project
 }
 
-# Oracle Cloud: credentials are variables (API key of a user), never read from ~/.oci. The key is sensitive.
-provider "oci" {
-  tenancy_ocid = var.oci_tenancy_ocid
-  user_ocid    = var.oci_user_ocid
-  fingerprint  = var.oci_fingerprint
-  private_key  = var.oci_private_key
-  region       = var.oci_region
+# Hetzner Cloud: the token is a variable (sensitive) of the HCP workspace, never read from the environment of a laptop.
+provider "hcloud" {
+  token = var.hcloud_token
 }

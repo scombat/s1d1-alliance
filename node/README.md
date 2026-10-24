@@ -5,11 +5,11 @@ ever starts a tantive image whose cosign signature verifies.
 
 | File | Role |
 | --- | --- |
-| `compose.yaml` | `tantive` (no published port, read-only, capture volume), `capture-init` (gives the volume to uid 10001) and `cloudflared` (`tunnel run`). Runs unchanged on the Oracle instance and on a homelab. |
+| `compose.yaml` | `tantive` (no published port, read-only, capture volume), `capture-init` (gives the volume to uid 10001) and `cloudflared` (`tunnel run`). Runs unchanged on the Hetzner VM and on a homelab. |
 | `desired.env` | The images every node runs, by digest. This is the file the nodes read from `main`. |
 | `update.sh` | `update.sh <env file> <desired url>`: download `desired.env`, verify, rewrite the images in the env file, `docker compose up -d`. |
 | `s1d1-update.service`, `s1d1-update.timer` | Run `update.sh` 2 minutes after boot and every 15 minutes. |
-| `cloud-init.yaml.tftpl` | Terraform `templatefile` for the Oracle instance (variables `tunnel_token`, `community_token`, `desired_url`). Embeds the files above verbatim. |
+| `cloud-init.yaml.tftpl` | Terraform `templatefile` for the Hetzner VM (variables `tunnel_token`, `community_token`, `desired_url`). Embeds the files above verbatim. |
 | `example.env` | Template of `/opt/s1d1/.env`. |
 | `test/` | `sh node/test/test_update.sh` (update.sh, with fake `cosign`, `curl`, `docker`) and `sh node/test/test_cloud_init.sh` (the cloud-init copies have not drifted). |
 

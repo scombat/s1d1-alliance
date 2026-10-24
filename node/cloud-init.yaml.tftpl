@@ -6,6 +6,11 @@
 #
 # The tokens end up in /opt/s1d1/.env (mode 0600, root) and in cloud-init's own copy of the user data
 # (/var/lib/cloud/instance/user-data.txt, root only). They are never printed by update.sh.
+#
+# No way in: no SSH key is given, so a provider may e-mail a root password. Password logins over SSH are turned off and
+# the ssh service is stopped and masked (first runcmd step); that password then only works on the provider's web console.
+# The node is repaired by replacing it.
+ssh_pwauth: false
 package_update: true
 package_upgrade: true
 packages:
@@ -22,7 +27,7 @@ write_files:
       # reaches tantive is what `cloudflared` forwards (ingress `http://tantive:8788`, set on the tunnel), and the only
       # traffic that leaves is the tunnel and the capture sender (https://s1d1.qoo.gy/ingest).
       #
-      # Generic: the same file runs on the Oracle A1 instance and on a homelab. The images (TANTIVE_IMAGE,
+      # Generic: the same file runs on the Hetzner VM and on a homelab. The images (TANTIVE_IMAGE,
       # CLOUDFLARED_IMAGE) are written into .env by update.sh from desired.env; the secrets (TUNNEL_TOKEN,
       # COMMUNITY_TOKEN) are put there by cloud-init or by hand. See example.env.
       name: s1d1
@@ -261,6 +266,9 @@ write_files:
       [Install]
       WantedBy=timers.target
 runcmd:
+  # nobody logs in over the network: stop and mask ssh (ssh.socket too: Ubuntu 24.04 starts sshd on demand)
+  - systemctl disable --now ssh.socket ssh.service || true
+  - systemctl mask ssh.socket ssh.service || true
   # cosign, pinned by version, with the sha256 of the release binary checked before it is installed
   - |
     set -eu

@@ -16,8 +16,9 @@ Done once, outside Terraform:
    `terraform/README.md` ("Manual steps", item 3), including a billing role **on the billing account**. It is the most
    powerful credential of the project: keep it out of the repository and rotate it.
 3. **HCP Terraform**: an organisation (the workspace is created below).
-4. **Oracle Cloud**: an account whose home region is in the EU, an API key for a user with `manage` rights on
-   `virtual-network-family` and `instance-family` in the compartment.
+4. **Hetzner Cloud**: an account and a project, and in that project an API token with **Read & Write** permission
+   (Security, API tokens), set as `hcloud_token` (sensitive) in HCP. The node is a paid server (about 6 EUR excluding
+   VAT a month): the Hetzner project has its own billing, the Google Cloud budget does not cover it.
 5. **GitHub**: the repository `scombat/s1d1-alliance`. Terraform creates the federation that lets its `main` branch push
    the anonymizer image; the three repository variables of section 3 are set by hand.
 
@@ -38,13 +39,12 @@ Done once, outside Terraform:
 | `billing_account` | no | |
 | `budget_currency` | no | must equal the billing account currency (default `EUR`) |
 | `anonymizer_image` | no | not set by hand: it comes from `terraform/images.auto.tfvars` (section 3); absent (null) on the first apply |
-| `oci_tenancy_ocid`, `oci_user_ocid`, `oci_fingerprint`, `oci_compartment_ocid` | no | |
-| `oci_private_key` | **yes** | PEM content of the API key, not a path |
+| `hcloud_token` | **yes** | Read & Write API token of the Hetzner Cloud project |
 | `GOOGLE_CREDENTIALS` | **yes** | environment variable, if not using dynamic credentials |
 
 Optional, with defaults: `deploy_version`, `status_commit`, `tantive_image`, `status_model`, `maintenance`, `cache_ttl`,
 `debug_cache_header`, `origin_requires_auth`, `gcp_region`, `budget_amount`, `github_repository`, `github_repository_owner_id` (set it: the numeric owner id),
-`oci_region`, `oci_availability_domain_index`.
+`hcloud_location`, `hcloud_server_type`.
 
 ## 3. First apply, in this order
 
@@ -55,7 +55,7 @@ bindings). So the first apply is a plain run, and a second one, with the image s
 
 1. **First apply, without the anonymizer**: start a run of the workspace (or merge to `main`) with no
    `terraform/images.auto.tfvars`. It creates the APIs, Artifact Registry, the federation and `ci-publisher`, the raw
-   bucket, the secrets, the budget, the R2 bucket and its token, the Workers, the tunnel and the Oracle node. Until the
+   bucket, the secrets, the budget, the R2 bucket and its token, the Workers, the tunnel and the Hetzner node. Until the
    second apply, `/ingest` writes raw objects that nobody cleans; the raw bucket deletes them at 3 days.
 2. **Repository variables** (GitHub, Settings, Secrets and variables, Actions, Variables; none is a secret):
    `GCP_WIF_PROVIDER` = `terraform output -raw ci_workload_identity_provider`,
@@ -98,12 +98,15 @@ by hand when the storage cost matters, never the digest in `terraform/images.aut
 
 ## 5. Nodes
 
-### Oracle Always Free node
+### Hetzner node
 
-Created by Terraform (`oci.tf`), no SSH, no inbound port. It writes `/opt/s1d1/.env` (0600) from cloud-init, installs
-cosign and the timer, and follows `node/desired.env` on `main` by itself. A node you cannot repair is replaced:
-`terraform apply -replace=oci_core_instance.node`. If the apply says "Out of host capacity", change
-`oci_availability_domain_index` or retry later.
+Oracle Always Free was dropped (account creation refused); the second node is a Hetzner VM.
+
+Created by Terraform (`hetzner.tf`): a `cax11` Arm server with a firewall that has no inbound rule, no SSH key, SSH
+stopped and masked by cloud-init. It writes `/opt/s1d1/.env` (0600) from cloud-init, installs cosign and the timer, and
+follows `node/desired.env` on `main` by itself. To look inside, use the Hetzner Console (web VNC) of the server. A node
+you cannot repair is replaced: `terraform apply -replace=hcloud_server.node`. If the apply fails for lack of Arm
+capacity, change `hcloud_location` (`fsn1`, `nbg1`, `hel1`) or retry later.
 
 ### Homelab
 

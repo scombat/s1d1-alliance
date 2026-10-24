@@ -59,6 +59,13 @@ else
   fail "/opt/s1d1/.env is not mode 0600"
 fi
 
+if grep -q '^ssh_pwauth: false$' "$TPL"; then ok "ssh password logins are disabled"; else fail "ssh_pwauth: false is missing"; fi
+if grep -q 'systemctl disable --now ssh.socket ssh.service' "$TPL" && grep -q 'systemctl mask ssh.socket ssh.service' "$TPL"; then
+  ok "runcmd stops and masks ssh"
+else
+  fail "runcmd does not stop and mask ssh"
+fi
+
 for cmd in 'sha256sum -c' 'cosign-linux-' 'systemctl enable --now s1d1-update.timer' 'systemctl start s1d1-update.service'; do
   if grep -q "$cmd" "$TPL"; then ok "runcmd has: $cmd"; else fail "runcmd lacks: $cmd"; fi
 done
