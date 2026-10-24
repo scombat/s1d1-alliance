@@ -10,8 +10,9 @@
 #
 # Trust: the tantive images (VERIFIED_KEYS) are verified with cosign, keyless, against the identity of the `build`
 # workflow of github.com/scombat/s1d1-tantive (the invocation of s1d1-tantive/docs/verify.md). cloudflared is not
-# signed by us: it is only checked to be pinned by digest, and it changes only through a digest change in
-# node/desired.env, which goes through review of a pull request on this repository.
+# signed by us: it is only checked to be pinned by digest in its own repository (docker.io/cloudflare/cloudflared), and
+# it changes only through a digest change in node/desired.env, which goes through review of a pull request here.
+# desired.env may set these two keys only, each bound to its repository; anything else refuses the whole file.
 #
 # The secrets (TUNNEL_TOKEN, COMMUNITY_TOKEN) live in <env file> only. They are never read, printed or logged here.
 set -eu
@@ -54,27 +55,17 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
   key=${line%%=*}
   value=${line#*=}
+  # a closed list of keys, each bound to its own repository: no other registry or repository can be started
   case $key in
-    '' | *[!A-Z0-9_]* | [0-9]*)
-      echo "update: refused, not a KEY=value line: $key" >&2
-      exit 1
-      ;;
-    *_IMAGE) ;;
+    TANTIVE_IMAGE) pattern='^ghcr\.io/scombat/s1d1-tantive:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' ;;
+    CLOUDFLARED_IMAGE) pattern='^docker\.io/cloudflare/cloudflared:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' ;;
     *)
-      echo "update: refused, desired.env may only set *_IMAGE keys, found $key" >&2
+      echo "update: refused, $key is not a key desired.env may set (TANTIVE_IMAGE, CLOUDFLARED_IMAGE)" >&2
       exit 1
       ;;
   esac
-  case $value in
-    *@sha256:*) ;;
-    *)
-      echo "update: refused, $key is not pinned by digest (@sha256:...)" >&2
-      exit 1
-      ;;
-  esac
-  # repository[:tag]@sha256:<64 lowercase hex>, no quotes, no spaces
-  if ! printf '%s\n' "$value" | grep -Eq '^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$'; then
-    echo "update: refused, $key is not a valid image reference with a sha256 digest" >&2
+  if ! printf '%s\n' "$value" | grep -Eq "$pattern"; then
+    echo "update: refused, $key is not <its repository>:<tag>@sha256:<64 hex> (explicit registry, pinned by digest)" >&2
     exit 1
   fi
   if [ "$value" != "$(current_value "$key")" ]; then
@@ -106,7 +97,8 @@ while IFS= read -r change; do
 done <"$CHANGES"
 
 # ---- 4. write the env atomically, then start ---------------------------------------------------------------------
-NEW=$(mktemp "$NODE_DIR/.env.XXXXXX")
+# $WORK is a subfolder of the target folder (same filesystem), and the trap removes it: `mv` below is atomic
+NEW=$WORK/env.new
 BACKUP=$WORK/env.previous
 if [ -f "$ENV_FILE" ]; then
   cp -p "$ENV_FILE" "$BACKUP"
@@ -123,6 +115,8 @@ if ! docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --remove-orp
   echo "update: docker compose up failed, previous images restored in $ENV_FILE" >&2
   cp -p "$BACKUP" "$WORK/restore"
   mv "$WORK/restore" "$ENV_FILE"
+  # bring the previous images back up (compose may have stopped or half replaced containers); the result is ignored
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --remove-orphans || true
   exit 1
 fi
 

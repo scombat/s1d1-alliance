@@ -103,7 +103,7 @@ check "signed image: tantive verified once, keyless, by digest" "$([ "$(count "c
 check "signed image: cloudflared is not cosign-verified" "$([ "$(count "cosign.*cloudflared")" -eq 0 ]; echo $?)"
 check "signed image: compose up -d called once" "$([ "$(count 'docker compose.* up -d')" -eq 1 ]; echo $?)"
 check "signed image: the env file stays private (0600)" "$([ "$(ls -l "$ENVF" | cut -c1-10)" = "-rw-------" ]; echo $?)"
-check "signed image: no temporary file left behind" "$([ "$(ls -A "$CASE" | grep -c '^\.env\.')" -eq 0 ]; echo $?)"
+check "signed image: no temporary file left behind" "$([ "$(ls -A "$CASE" | grep -c '^\.\(update\|env\)\.')" -eq 0 ]; echo $?)"
 check "signed image: no secret is printed" "$(! grep -q 'secret-value' "$OUT" "$FAKE_LOG"; echo $?)"
 
 # ---- 2. an invalid signature: exit 1, env and compose intact -------------------------------------------------------
@@ -170,6 +170,7 @@ FAKE_COMPOSE_FAIL=1
 export FAKE_COMPOSE_FAIL
 run_update
 check "compose failure: exit 1 and the previous env is restored (retried next run)" "$([ "$RC" -eq 1 ] && cmp -s "$ENVF" "$CASE/env.before"; echo $?)"
+check "compose failure: compose runs once more on the restored env" "$([ "$(count 'docker compose.* up -d')" -eq 2 ]; echo $?)"
 
 new_case cloudflared-only
 printf 'TANTIVE_IMAGE=%s@%s\n' "$TANTIVE" "$D1" >>"$ENVF"
@@ -183,6 +184,25 @@ cp "$ENVF" "$CASE/env.before"
 printf 'TANTIVE_IMAGE=%s@%s\nCLOUDFLARED_IMAGE=docker.io/cloudflare/cloudflared:latest\n' "$TANTIVE" "$D3" >"$FAKE_DESIRED"
 run_update
 check "one bad line refuses the whole file (exit 1, nothing verified, env unchanged)" "$([ "$RC" -eq 1 ] && cmp -s "$ENVF" "$CASE/env.before" && [ "$(count 'cosign')" -eq 0 ]; echo $?)"
+
+# ---- 7. images only from their own repositories ------------------------------------------------------------------
+refused() { # refused <name> <desired.env line>: exit 1, env untouched, nothing verified or started
+  new_case "$1"
+  printf 'TANTIVE_IMAGE=%s@%s\n' "$TANTIVE" "$D1" >>"$ENVF"
+  cp "$ENVF" "$CASE/env.before"
+  printf '%s\n' "$2" >"$FAKE_DESIRED"
+  run_update
+  check "$1: exit 1, env unchanged, no cosign, no compose" "$([ "$RC" -eq 1 ] && cmp -s "$ENVF" "$CASE/env.before" && [ "$(count 'cosign')" -eq 0 ] && [ "$(count 'docker')" -eq 0 ]; echo $?)"
+}
+refused tantive-foreign-registry "TANTIVE_IMAGE=docker.io/attacker/s1d1-tantive:0.8.0@$D3"
+refused tantive-foreign-owner "TANTIVE_IMAGE=ghcr.io/attacker/s1d1-tantive:0.8.0@$D3"
+refused tantive-foreign-repo "TANTIVE_IMAGE=ghcr.io/scombat/other:0.8.0@$D3"
+refused tantive-no-registry "TANTIVE_IMAGE=scombat/s1d1-tantive:0.8.0@$D3"
+refused cloudflared-foreign-registry "CLOUDFLARED_IMAGE=docker.io/attacker/x:1@$D3"
+refused cloudflared-other-registry "CLOUDFLARED_IMAGE=ghcr.io/cloudflare/cloudflared:2026.10.3@$D3"
+refused cloudflared-implicit-registry "CLOUDFLARED_IMAGE=cloudflare/cloudflared:2026.10.3@$D3"
+refused other-image-key "FOO_IMAGE=docker.io/cloudflare/cloudflared:2026.10.3@$D3"
+refused tag-with-extra-at "TANTIVE_IMAGE=$TANTIVE@$D1@$D3"
 
 echo
 echo "$PASS passed, $FAIL failed"

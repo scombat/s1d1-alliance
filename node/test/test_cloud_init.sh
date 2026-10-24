@@ -35,7 +35,6 @@ same() { # same <path in the node> <file of node/>
 }
 
 same /opt/s1d1/compose.yaml compose.yaml
-same /opt/s1d1/cosign.pub cosign.pub
 same /opt/s1d1/update.sh update.sh
 same /etc/systemd/system/s1d1-update.service s1d1-update.service
 same /etc/systemd/system/s1d1-update.timer s1d1-update.timer

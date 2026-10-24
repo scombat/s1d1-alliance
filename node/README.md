@@ -10,26 +10,38 @@ ever starts a tantive image whose cosign signature verifies.
 | `update.sh` | `update.sh <env file> <desired url>`: download `desired.env`, verify, rewrite the images in the env file, `docker compose up -d`. |
 | `s1d1-update.service`, `s1d1-update.timer` | Run `update.sh` 2 minutes after boot and every 15 minutes. |
 | `cloud-init.yaml.tftpl` | Terraform `templatefile` for the Oracle instance (variables `tunnel_token`, `community_token`, `desired_url`). Embeds the files above verbatim. |
-| `cosign.pub` | The project key of s1d1-tantive, copied unchanged. It verifies images up to 0.5.0 only (see below). |
 | `example.env` | Template of `/opt/s1d1/.env`. |
 | `test/` | `sh node/test/test_update.sh` (update.sh, with fake `cosign`, `curl`, `docker`) and `sh node/test/test_cloud_init.sh` (the cloud-init copies have not drifted). |
 
 ## What update.sh trusts
 
-`update.sh` reads `desired.env` and accepts nothing but `*_IMAGE=repository[:tag]@sha256:<64 hex>` lines. One bad
-line refuses the whole file (exit 1). For each image that differs from the env file:
+`update.sh` reads `desired.env` and accepts a closed list of two keys, each bound to its own repository, written with
+the explicit registry and pinned by digest:
 
-- `TANTIVE_IMAGE` is verified with `cosign verify <image> --certificate-identity-regexp <the build workflow of
+- `TANTIVE_IMAGE=ghcr.io/scombat/s1d1-tantive:<tag>@sha256:<64 hex>`
+- `CLOUDFLARED_IMAGE=docker.io/cloudflare/cloudflared:<tag>@sha256:<64 hex>`
+
+Any other key (including any other `*_IMAGE`), another registry or repository, or a reference without a digest refuses
+the whole file (exit 1): a compromised `main` cannot make a node run an arbitrary image next to the tunnel token. For
+each image that differs from the env file:
+
+- `TANTIVE_IMAGE` is verified **keyless**: `cosign verify <image> --certificate-identity-regexp <the build workflow of
   scombat/s1d1-tantive> --certificate-oidc-issuer https://token.actions.githubusercontent.com`, exactly as
   [s1d1-tantive/docs/verify.md](https://github.com/scombat/s1d1-tantive/blob/main/docs/verify.md) documents for
-  releases from 0.6.0 on (keyless, recorded in Rekor). `cosign.pub` does not verify 0.8.0 and is not used by the
-  script; it is installed for images up to 0.5.0, and kept as the copy of the key the brief asked for.
-- `CLOUDFLARED_IMAGE` is not signed by our key, so it is not cosign-verified. It is pinned by digest and changes only
-  through a pull request on `node/desired.env`. The set of verified keys is the `VERIFIED_KEYS` variable of the script.
+  releases from 0.6.0 on (recorded in Rekor). There is no key to install or rotate; the project key `cosign.pub` of
+  s1d1-tantive only verifies images up to 0.5.0 and this repository does not carry it.
+- `CLOUDFLARED_IMAGE` is not signed by us, so it is not cosign-verified. Its repository is fixed above and it changes
+  only through a pull request on `node/desired.env`. The set of verified keys is the `VERIFIED_KEYS` variable of the script.
 
-All verifications run before anything is written. The env file is replaced atomically (temporary file in the same
-folder, then `mv`, mode 0600); if `docker compose up` fails, the previous env file is put back and the next run retries.
-Exit codes: 0 up to date or updated, 1 refused or failed to apply (nothing changed), 2 the download failed.
+All verifications run before anything is written. The env file is replaced atomically (temporary file in a scratch
+folder inside the node folder, so on the same filesystem, then `mv`, mode 0600). Exit codes:
+
+- 0: up to date or updated;
+- 1: refused (bad desired file, signature that does not verify) **or** `docker compose up -d` failed. In the second
+  case the previous env file is put back, `docker compose up -d` runs once more on it (its result is ignored) and the
+  next timer run retries;
+- 2: the download failed.
+
 The tokens are never read, printed or logged by the script.
 
 ## Dependencies
