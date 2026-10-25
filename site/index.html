@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>s1d1: send each prompt to the right model</title>
 <meta name="description" content="A free hosted instance of s1d1, a small multilingual model that scores prompt complexity for LLM routers. Or self-host it with s1d1-tantive.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%2313261D%27/%3E%3Ctext x=%2716%27 y=%2722.5%27 text-anchor=%27middle%27 font-family=%27system-ui,sans-serif%27 font-size=%2717%27 font-weight=%27700%27 fill=%27%23C9F27A%27%3Es1%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="s1d1">
+<meta property="og:title" content="s1d1: send each prompt to the right model">
+<meta property="og:description" content="A free hosted API (or one container you run yourself) that tells your LLM router how hard a prompt is, what task it is and whether it needs tools. Multilingual, open weights.">
+<meta property="og:url" content="https://s1d1.qoo.gy/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="s1d1: send each prompt to the right model">
+<meta name="twitter:description" content="A free hosted API (or one container you run yourself) that tells your LLM router how hard a prompt is. Multilingual, open weights.">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -15,7 +24,7 @@
 <p class="lead">s1d1 reads a prompt once and tells your router how hard it is, what kind of task it is and whether it needs tools, so easy prompts go to cheap models and hard ones to strong models.</p>
 <div class="stats">
 <div class="stat hi"><b>Free</b><span>hosted API, no account, no key</span></div>
-<div class="stat"><b>~20 ms</b><span>per decision, before the LLM call</span></div>
+<div class="stat"><b>~10–60 ms</b><span>server time per decision, measured; the network adds to it</span></div>
 <div class="stat"><b>19 tasks</b><span>multilingual, open weights (Apache-2.0)</span></div>
 </div>
 </header>
@@ -31,13 +40,13 @@
 </section>
 <section class="path">
 <h3>Run it yourself, privately</h3>
-<ul><li>One container, CPU only, ~20 ms.</li><li>Your prompts never leave your network.</li></ul>
+<ul><li>One container, CPU only, ~10–60 ms of server time per decision.</li><li>Your prompts never leave your network.</li></ul>
 <a class="btn" href="#self-host">Self-host with tantive ↓</a>
 </section>
 </div>
 
 <h2 id="setup">Set it up in two minutes</h2>
-<p class="sub">Pick what you use. Each snippet is complete: copy, paste, run.</p>
+<p class="sub">Pick what you use. Values in <span style="color:var(--link);font-weight:600">green</span> inside a snippet are yours to replace (your own models, your own keys); the rest is copy and paste.</p>
 <label class="gate"><input type="checkbox" id="accept"><span>Everything you send to this service is kept and used to retrain s1d1; using the API means you accept the <a href="/conditions/v1/">terms</a>. Tick to see the setup.</span></label>
 
 <div id="tutorial" hidden>
@@ -54,7 +63,7 @@
 <div class="panes">
 
 <div class="pane p-litellm">
-<div class="step">1 · config.yaml (LiteLLM 1.106 or later)</div>
+<div class="step">1 · config.yaml (LiteLLM 1.106 or later; tested with 1.106.4)</div>
 <pre>model_list:
   <span class="c"># … your four models: cheap, medium, strong, reasoning</span>
   - model_name: s1d1-auto
@@ -83,7 +92,7 @@
 <div class="step">1 · Route with LiteLLM (LiteLLM tab), with Claude models as tiers</div>
 <pre>tiers: { SIMPLE: <span class="k">claude-haiku</span>, MEDIUM: <span class="k">claude-sonnet</span>,
          COMPLEX: <span class="k">claude-opus</span>, REASONING: <span class="k">claude-opus</span> }</pre>
-<div class="step">2 · Point Claude Code at LiteLLM</div>
+<div class="step">2 · Point Claude Code at LiteLLM (run locally through LiteLLM 1.106.4)</div>
 <pre>export ANTHROPIC_BASE_URL=http://localhost:4000
 export ANTHROPIC_AUTH_TOKEN=<span class="k">your-litellm-key</span>
 export ANTHROPIC_MODEL=s1d1-auto
@@ -92,7 +101,7 @@ claude</pre>
 
 <div class="pane p-codex">
 <div class="step">1 · Route with LiteLLM (LiteLLM tab)</div>
-<div class="step">2 · ~/.codex/config.toml</div>
+<div class="step">2 · ~/.codex/config.toml (run locally through LiteLLM 1.106.4)</div>
 <pre>model = "s1d1-auto"
 model_provider = "litellm"
 
@@ -115,6 +124,7 @@ wire_api = "responses"</pre>
       type: openai-models-list  <span class="c"># finds s1d1-auto in LiteLLM's /v1/models</span></pre>
 <div class="step">3 · Run</div>
 <pre>omp --model litellm/s1d1-auto</pre>
+<p class="note">Not tested: this tab follows oh-my-pi's documentation only.</p>
 </div>
 
 <div class="pane p-n8n">
@@ -160,7 +170,7 @@ client.chat.completions.create(model=MODELS[tier], messages=[...])</pre>
 
 </div>
 </div>
-<p class="note">Limit: 100 requests per 10 s per IP. On a 429 or a 503, fall back to your default model.</p>
+<p class="note">Limit: about 100 requests per 10 s per IP (approximate, counted per Cloudflare location). On a 429 or a 503, fall back to your default model.</p>
 
 <h3>Try it here</h3>
 <form id="try-box">
