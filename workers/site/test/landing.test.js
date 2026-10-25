@@ -63,13 +63,28 @@ test("llms.txt states no unmeasured savings figure", () => {
   }
 });
 
-test("each legal page is a template marked 'À rédiger et faire relire par le juriste'", () => {
+test("each legal page is written, in French, with no placeholder left", () => {
   for (const p of ["conditions/v1", "confidentialite/v1", "mentions-legales"]) {
     const h = read(`${p}/index.html`);
     assert.match(h, /<h1>[^<]+<\/h1>/);
-    assert.match(h, /À rédiger et faire relire par le juriste\./);
     assert.match(h, /lang="fr"/);
+    assert.doesNotMatch(h, /À rédiger/);
+    assert.doesNotMatch(h, /\{\{[A-Z_]+\}\}/, `${p}: a {{FIELD}} is still to fill`);
   }
+});
+
+test("the terms say that using the API is acceptance and that what is sent is kept for retraining", () => {
+  const h = read("conditions/v1/index.html");
+  assert.match(h, /Utiliser l'API du service[^.]*vaut également acceptation/);
+  assert.match(h, /irrévocable/);
+  assert.match(h, /N'envoyez pas de données personnelles/);
+});
+
+test("the privacy policy states the raw retention and the subprocessors", () => {
+  const h = read("confidentialite/v1/index.html");
+  assert.match(h, /au plus 4 jours/);
+  for (const name of ["Cloudflare", "Google Cloud", "Hetzner"]) assert.match(h, new RegExp(name));
+  assert.doesNotMatch(h, /Oracle/);
 });
 
 test("LiteLLM is documented as System One with api_base at the service root /api", () => {
