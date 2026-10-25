@@ -1,0 +1,22 @@
+name: Question
+description: How the instance works, how to call it, or how to run a community node.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste real prompts that contain personal data, nor tokens or keys.
+  - type: textarea
+    id: did
+    attributes:
+      label: What you are trying to do
+      description: And what you tried.
+    validations:
+      required: true
+  - type: textarea
+    id: saw
+    attributes:
+      label: What you saw
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
