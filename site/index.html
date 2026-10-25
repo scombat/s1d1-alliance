@@ -37,10 +37,11 @@
 </div>
 
 <h2 id="setup">Set it up in two minutes</h2>
-<p class="sub">Pick what you use. Each snippet is complete: copy, paste, run. Self-hosting? Replace <code>https://s1d1.qoo.gy/api</code> with your own URL.</p>
+<p class="sub">Pick what you use. Each snippet is complete: copy, paste, run.</p>
 <label class="gate"><input type="checkbox" id="accept"><span>Everything you send to this service is kept and used to retrain s1d1; using the API means you accept the <a href="/conditions/v1/">terms</a>. Tick to see the setup.</span></label>
 
 <div id="tutorial" hidden>
+<p id="api-url">Base URL: <code>https://s1d1.qoo.gy/api</code>. Self-hosting? Use your own URL instead in every snippet.</p>
 <div class="tabs" role="radiogroup" aria-label="Your tool">
 <input type="radio" name="tool" id="t-litellm" checked><label for="t-litellm">LiteLLM</label>
 <input type="radio" name="tool" id="t-claude"><label for="t-claude">Claude Code</label>
@@ -75,7 +76,7 @@
           REASONING: <span class="k">reasoning</span></pre>
 <div class="step">2 · Call it like any model</div>
 <pre>"model": "s1d1-auto"</pre>
-<p class="note">If s1d1 is slow or unreachable, LiteLLM uses the default model: routing never blocks a request. More in <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a>.</p>
+<p class="note">If s1d1 is slow or unreachable, LiteLLM uses the default model: routing never blocks a request. Before 1.106, use the chat-completions format with the base URL <code>https://s1d1.qoo.gy/api/v1</code>. More in <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a>.</p>
 </div>
 
 <div class="pane p-claude">
@@ -162,7 +163,7 @@ client.chat.completions.create(model=MODELS[tier], messages=[...])</pre>
 <p class="note">Limit: 100 requests per 10 s per IP. On a 429 or a 503, fall back to your default model.</p>
 
 <h3>Try it here</h3>
-<form id="try-form">
+<form id="try-box">
 <textarea id="try-text" aria-label="Prompt to classify" placeholder="Paste a prompt"></textarea>
 <p><button class="go" type="submit">Classify</button></p>
 </form>
@@ -178,7 +179,7 @@ client.chat.completions.create(model=MODELS[tier], messages=[...])</pre>
 <ul>
 <li>CPU only, amd64 and arm64, 1 GiB of RAM.</li>
 <li>Signed images and checksummed weights.</li>
-<li>Optional: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/capture.md">send your captures here</a> to help retrain s1d1.</li>
+<li>Optional: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/capture.md">send your captures here</a> to help retrain s1d1 (wire format: <a href="https://github.com/scombat/s1d1-alliance/blob/main/contract/ingest-v1.md">contract/ingest-v1.md</a>).</li>
 <li><a href="https://github.com/scombat/s1d1-tantive">s1d1-tantive on GitHub</a> (BSL 1.1).</li>
 </ul>
 </div>

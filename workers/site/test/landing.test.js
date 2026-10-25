@@ -8,8 +8,14 @@ const js = read("app.js");
 const txt = read("llms.txt");
 
 test("the /api URL, the tutorial and the try box are hidden until the box is checked", () => {
-  for (const id of ["api-url", "tutorial", "try-box"]) {
-    assert.match(html, new RegExp(`<[a-z]+[^>]*id="${id}"[^>]*\\bhidden\\b|<[a-z]+[^>]*\\bhidden\\b[^>]*id="${id}"`), id);
+  assert.match(html, /<div id="tutorial" hidden>/);
+  const start = html.indexOf('<div id="tutorial" hidden>');
+  const end = html.indexOf('<h2 id="self-host">');
+  assert.ok(start >= 0 && end > start, "the gated block ends where the self-host section starts");
+  const gated = html.slice(start, end);
+  for (const id of ["api-url", "try-box"]) assert.match(gated, new RegExp(`id="${id}"`), id);
+  for (const m of html.matchAll(/s1d1\.qoo\.gy\/api/g)) {
+    assert.ok(m.index > start && m.index < end, `the API URL at ${m.index} is outside the gated block`);
   }
   assert.match(js, /\.hidden\s*=\s*false|removeAttribute\(["']hidden["']\)/);
   assert.match(js, /["']change["']/);
@@ -90,9 +96,11 @@ test("the privacy policy states the raw retention and the subprocessors", () => 
 test("LiteLLM is documented as System One with api_base at the service root /api", () => {
   for (const [name, t] of [["html", html], ["llms", txt]]) {
     assert.match(t, /oss_classifier/, name);
-    assert.match(t, /"api_base": "https:\/\/s1d1\.qoo\.gy\/api"/, name);
     assert.match(t, /before 1\.106/i, name);
   }
+  assert.match(html, /api_base: https:\/\/s1d1\.qoo\.gy\/api\n/); // the YAML of the LiteLLM tab
+  assert.match(txt, /"api_base": "https:\/\/s1d1\.qoo\.gy\/api"/);
+  assert.match(html + txt, /classifier_fallback: default_model|classifier_fallback "default_model"/);
   assert.match(html, /Base URL: <code>https:\/\/s1d1\.qoo\.gy\/api<\/code>/);
 });
 

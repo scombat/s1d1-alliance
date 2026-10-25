@@ -31,7 +31,7 @@ for (const pre of tutorial.querySelectorAll(".pane pre")) {
 }
 
 const out = document.getElementById("try-out");
-document.getElementById("try-form").addEventListener("submit", async (ev) => {
+document.getElementById("try-box").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const text = document.getElementById("try-text").value.trim();
   if (!text) return;
