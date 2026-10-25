@@ -337,7 +337,7 @@ resource "google_eventarc_trigger" "raw_finalized" {
   count = local.anonymizer_enabled ? 1 : 0
 
   name     = "s1d1-raw-finalized"
-  location = google_storage_bucket.raw.location # a Cloud Storage trigger lives in the bucket's region
+  location = var.gcp_region # the bucket's region, lower case: the bucket reports its location in upper case (EUROPE-WEST1), which Eventarc rejects as "not found"
 
   matching_criteria {
     attribute = "type"
