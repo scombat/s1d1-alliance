@@ -350,11 +350,12 @@ resource "google_project_iam_member" "eventarc_agent" {
   depends_on = [google_project_service.api["eventarc.googleapis.com"]]
 }
 
-# Pub/Sub's agent: signs the OIDC token of the push to Cloud Run on behalf of eventarc-invoker.
-resource "google_project_iam_member" "pubsub_agent_token_creator" {
-  project = var.gcp_project
-  role    = "roles/iam.serviceAccountTokenCreator"
-  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+# Pub/Sub's agent: signs the OIDC token of the push to Cloud Run on behalf of eventarc-invoker. Scoped to that one
+# service account: a project-level grant would let the agent impersonate every account of the project.
+resource "google_service_account_iam_member" "pubsub_agent_token_creator" {
+  service_account_id = google_service_account.eventarc_invoker.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 
   depends_on = [google_project_service.api["pubsub.googleapis.com"]]
 }
@@ -391,7 +392,7 @@ resource "google_eventarc_trigger" "raw_finalized" {
     google_project_iam_member.gcs_agent_publishes,
     google_project_iam_member.eventarc_invoker_receives,
     google_project_iam_member.eventarc_agent,
-    google_project_iam_member.pubsub_agent_token_creator,
+    google_service_account_iam_member.pubsub_agent_token_creator,
     google_cloud_run_v2_service_iam_member.eventarc_invokes,
   ]
 }

@@ -150,7 +150,10 @@ ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anon
   - Terraform also grants two Google-managed service agents on the project: `roles/eventarc.serviceAgent` to the
     Eventarc agent (`service-<project number>@gcp-sa-eventarc.iam.gserviceaccount.com`) and
     `roles/iam.serviceAccountTokenCreator` to the Pub/Sub agent (`service-<project number>@gcp-sa-pubsub.iam.gserviceaccount.com`,
-    for the OIDC push to Cloud Run). Terraform grants both; they were made by hand at the first deployment.
+    for the OIDC push to Cloud Run), **on the `eventarc-invoker` service account only**, never project-wide (a
+    project-level token creator could impersonate every account of the project). Terraform grants both; they were made
+    by hand at the first deployment, the token creator then at project level: remove that one (`gcloud projects
+    remove-iam-policy-binding … --role=roles/iam.serviceAccountTokenCreator`) once Terraform has applied the scoped one.
   - `ci-publisher`: `roles/artifactregistry.writer` on the `s1d1` repository only (see below).
 - **Secrets** `r2-access-key-id`, `r2-secret-access-key` in Secret Manager, replicated in `europe-west1` only. The
   service reads the pinned version, so a rotation (new R2 token) makes a new revision.
