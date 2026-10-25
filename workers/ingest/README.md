@@ -23,8 +23,11 @@ write and, when a rate limit binding is missing or fails, a fixed message naming
 
 ## Rate limits
 
+> **Not enforced in practice (measured 2026-10-25):** 130 requests from one IP were all accepted; the bindings are
+> called and answer "allowed" every time (see "Measured" below). What follows describes what the code asks for.
+
 Two [Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) bindings
-count requests per client IP:
+are asked, per client IP:
 
 | binding | limit | period | `Retry-After` when refused |
 |---|---|---|---|
@@ -47,6 +50,10 @@ burst is asked first; a request it refuses does not use the sustained budget). O
   data centre that serves the request and eventually consistent, so a client spread over several locations can
   exceed the figures. They stop a loop, not a determined distributed attacker. `/api` keeps the single zone WAF
   rule (`terraform/cloudflare.tf`); this replaces it for `/ingest` only.
+- **Measured 2026-10-25: not enforced.** 130 `POST /ingest` from one IP were all accepted, although the two bindings
+  are declared and were never logged as missing or failing, so they answered "allowed". The bindings stay in the code
+  (no effect for now); no other edge limit is added during the first period, and if abuse shows in the analytics a
+  Durable Object limiter will be built. Treat the figures above as intended, not as a guarantee.
 - **A missing binding fails open** for that limit (local runs, tests without it), with one fixed log line that
   names the binding and nothing of the request. A binding that throws is treated the same. So that this cannot ship
   unnoticed, `test/terraform.test.js` reads `terraform/workers.tf` and fails if either binding is not declared on

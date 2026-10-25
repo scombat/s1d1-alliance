@@ -40,3 +40,17 @@ test("the two rate limit namespace ids are distinct", () => {
   assert.equal(ids.length, 2);
   assert.notEqual(ids[0], ids[1]);
 });
+
+// Invocation logs store per-request metadata (request, response, client details) at Cloudflare, against the privacy
+// policy (no IP or headers recorded). They are pinned off in Terraform so a dashboard change is reverted by the next apply.
+for (const name of ["site", "ingest"]) {
+  test(`terraform declares invocation logs disabled on the ${name} Worker`, () => {
+    const start = workersTf.indexOf(`resource "cloudflare_workers_script" "${name}"`);
+    assert.notEqual(start, -1, `${name} Worker resource not found`);
+    const rest = workersTf.slice(start + 1);
+    const next = rest.search(/^resource /m);
+    const body = next === -1 ? rest : rest.slice(0, next);
+    assert.match(body, /^\s*invocation_logs\s*=\s*false\s*$/m, `${name}: invocation_logs must be false`);
+    assert.doesNotMatch(body, /invocation_logs\s*=\s*true/, `${name}: invocation_logs must never be true`);
+  });
+}

@@ -24,6 +24,24 @@ resource "cloudflare_workers_script" "site" {
   content_sha256     = filesha256("${path.module}/../workers/site/src/index.js")
   compatibility_date = local.compatibility_date
 
+  # Workers Logs: our own console lines (they never carry request data) are kept, the platform's invocation logs are
+  # off ON PURPOSE. They store per-request metadata at Cloudflare (request, response, client details), which would
+  # contradict the privacy policy: the IP address and headers are never recorded by the service. Never enable them
+  # from the dashboard: the next apply reverts it.
+  observability = {
+    enabled            = true
+    head_sampling_rate = 1
+    logs = {
+      enabled            = true
+      invocation_logs    = false
+      head_sampling_rate = 1
+      persist            = true
+    }
+    traces = {
+      enabled = false
+    }
+  }
+
   files = {
     "src/api.js" = {
       content_file = "${path.module}/../workers/site/src/api.js"
@@ -73,6 +91,24 @@ resource "cloudflare_workers_script" "ingest" {
   content_file       = "${path.module}/../workers/ingest/src/index.js"
   content_sha256     = filesha256("${path.module}/../workers/ingest/src/index.js")
   compatibility_date = local.compatibility_date
+
+  # Workers Logs: our own console lines (they never carry request data) are kept, the platform's invocation logs are
+  # off ON PURPOSE. They store per-request metadata at Cloudflare (request, response, client details), which would
+  # contradict the privacy policy: the IP address and headers are never recorded by the service. Never enable them
+  # from the dashboard: the next apply reverts it.
+  observability = {
+    enabled            = true
+    head_sampling_rate = 1
+    logs = {
+      enabled            = true
+      invocation_logs    = false
+      head_sampling_rate = 1
+      persist            = true
+    }
+    traces = {
+      enabled = false
+    }
+  }
 
   files = {
     "src/gcs.js" = {

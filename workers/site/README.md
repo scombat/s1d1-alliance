@@ -56,7 +56,7 @@ wins). No secret is needed here.
 
 `/api/*` is limited per client IP (`cf-connecting-ip`, `unknown` when absent) by the `API_BURST`
 [Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) binding:
-100 requests per 10 s. The landing, `/status.json` and the static assets are never limited.
+100 requests per 10 s (as configured; see "Measured" below, it was not enforced when tested). The landing, `/status.json` and the static assets are never limited.
 
 - The check comes after maintenance and the allow-list (an unknown path is still a 404, a wrong method a 405, and
   neither uses budget) and before the body is read and the cache is consulted. A cache HIT counts like any other
@@ -65,6 +65,11 @@ wins). No secret is needed here.
   not consulted.
 - A missing or throwing binding fails open, with one log line that names the binding and holds no request data.
 - The count is approximate and per Cloudflare location (the binding is eventually consistent), like the ingest limits.
+- **Measured 2026-10-25: not enforced.** 430 requests to `/api` from one IP (110 in under 1 s, 320 over 8 s) were all
+  accepted. The Workers logs show the `API_BURST` binding was called and never reported missing or failing, so it
+  answered "allowed" every time. Cloudflare documents these limits as approximate and per location. Decision: the
+  binding stays in the code (no effect for now) and no other edge limit is added during the first period; the deadline
+  shedding of tantive protects its capacity. If abuse shows in the analytics, a Durable Object limiter will be built.
 - **There is no zone rule.** The zone `qoo.gy` allows a single rate limiting rule on the Free plan and it is already
   used by another subdomain; Terraform must never manage that zone ruleset (`terraform/cloudflare.tf`).
 - **Known trade-off.** When the Workers daily request quota is exhausted, the route fails open (section "Manual steps"
