@@ -1,11 +1,15 @@
-# Google Cloud half of the instance: the raw bucket (3-day buffer), the anonymizer on Cloud Run, the Eventarc trigger
-# that calls it, and the registry its image lives in. Budget: budget.tf. CI identity: wif.tf.
+# Google Cloud half of the instance: the raw bucket (3-day buffer), the anonymizer as a Cloud Run Job, the Cloud
+# Scheduler job that starts it every 2 days, and the registry its image lives in. Budget: budget.tf. CI: wif.tf.
 #
-#   ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anonymizer --S3--> R2 s1d1-clean
+#   ingest Worker --HMAC--> raw bucket <--reads-- anonymizer job --S3--> R2 s1d1-clean
+#                                                     ^ every 2 days: Cloud Scheduler --OAuth--> jobs.run
+#
+# The cost is bounded by the job, not by the traffic: each run draws at most anonymizer_max_prompts lines and stops at
+# 55 minutes (docs/31 of the project). Until 2026-10-25 an Eventarc trigger ran the anonymizer on every raw object.
 #
 # The first apply runs with anonymizer_image = null: the registry, the federation, the buckets and the Workers exist,
-# the anonymizer does not (no image to run yet). The Cloud Run service, its invoker binding, the Eventarc trigger and
-# the anonymizer's IAM bindings are created by the apply that sets the image (docs/operations.md, section 3).
+# the anonymizer does not (no image to run yet). The job, its schedule and the anonymizer's IAM bindings are created
+# by the apply that sets the image (docs/operations.md, section 3).
 
 locals {
   anonymizer_enabled = var.anonymizer_image != null
@@ -26,13 +30,6 @@ data "google_project" "this" {
   depends_on = [google_project_service.api]
 }
 
-# The Cloud Storage service agent (the identity that publishes bucket events to Pub/Sub).
-data "google_storage_project_service_account" "gcs" {
-  project = var.gcp_project
-
-  depends_on = [google_project_service.api]
-}
-
 # ---------------------------------------------------------------------------------------------------------------------
 # APIs. Not disabled on destroy: other things in the project may use them.
 # Bootstrap: serviceusage and cloudresourcemanager must already be on for this resource to work (README).
@@ -40,8 +37,7 @@ data "google_storage_project_service_account" "gcs" {
 locals {
   gcp_apis = [
     "run.googleapis.com",
-    "eventarc.googleapis.com",
-    "pubsub.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "storage.googleapis.com",
     "secretmanager.googleapis.com",
     "artifactregistry.googleapis.com",
@@ -78,15 +74,15 @@ resource "google_service_account" "anonymizer" {
   depends_on = [google_project_service.api]
 }
 
-resource "google_service_account" "eventarc_invoker" {
-  account_id   = "eventarc-invoker"
-  display_name = "s1d1 Eventarc trigger: receives bucket events and calls the anonymizer"
+resource "google_service_account" "scheduler" {
+  account_id   = "anonymizer-scheduler"
+  display_name = "s1d1 Cloud Scheduler: starts the anonymizer job, nothing else"
 
   depends_on = [google_project_service.api]
 }
 
 # The account HCP runs as acts (iam.serviceAccounts.actAs) only as the runtime accounts Terraform attaches to a resource:
-# anonymizer (Cloud Run identity) and eventarc-invoker (Eventarc trigger identity). ingest-writer is only the owner of
+# anonymizer (identity of the Cloud Run Job) and anonymizer-scheduler (identity of the Cloud Scheduler job). ingest-writer is only the owner of
 # an HMAC key and is attached to nothing. The HCP account itself is bootstrapped by hand (README.md, "Manual steps").
 resource "google_service_account_iam_member" "terraform_acts_as_anonymizer" {
   service_account_id = google_service_account.anonymizer.name
@@ -94,8 +90,8 @@ resource "google_service_account_iam_member" "terraform_acts_as_anonymizer" {
   member             = "serviceAccount:${var.terraform_service_account}"
 }
 
-resource "google_service_account_iam_member" "terraform_acts_as_eventarc_invoker" {
-  service_account_id = google_service_account.eventarc_invoker.name
+resource "google_service_account_iam_member" "terraform_acts_as_scheduler" {
+  service_account_id = google_service_account.scheduler.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${var.terraform_service_account}"
 }
@@ -136,7 +132,7 @@ resource "google_storage_bucket_iam_member" "ingest_writer_creates" {
   member = "serviceAccount:${google_service_account.ingest_writer.email}"
 }
 
-# The anonymizer reads objects of this bucket, nothing else.
+# The anonymizer reads and lists objects of this bucket, nothing else (it never deletes: the lifecycle rule does).
 resource "google_storage_bucket_iam_member" "anonymizer_reads" {
   count = local.anonymizer_enabled ? 1 : 0
 
@@ -224,85 +220,86 @@ resource "google_artifact_registry_repository" "s1d1" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# The anonymizer on Cloud Run.
-#  - ingress INTERNAL_ONLY: the internet cannot reach it, not even with a valid token. Eventarc (Pub/Sub push) is
-#    allowed by Cloud Run for "internal" ingress when it is in the same project and uses the default run.app URL, see
-#    https://docs.cloud.google.com/run/docs/securing/ingress . So default_uri_disabled stays false.
-#  - no allUsers / allAuthenticatedUsers binding: only eventarc-invoker may call it (below).
-#  - one request per instance (the models are CPU-bound), at most 2 instances, none when idle.
-#  - 4 GiB: the two GLiNER encoders are about 0.7 GB (base) and 1.1 GB (multilingual) of float32 weights, plus torch and
-#    the windows being scored; 2 GiB does not hold them. README.md of the anonymizer gives no measured RSS: lower this
-#    only after reading the real peak in Cloud Run's metrics.
-#  - 3600 s, the maximum of Cloud Run: a 65 536-character prompt takes about 10 s on a laptop, more on a vCPU, and
-#    a batch holds up to 500 lines.
+# The anonymizer as a Cloud Run Job (python -m anonymizer.batch, anonymizer/README.md).
+#  - one task, no retry: a failed run waits for the next one (2 days later at most, within the 3-day buffer).
+#  - timeout 3600 s; the job stops cleaning at MAX_SECONDS = 3300 by itself and writes what it kept, so the timeout
+#    is only a backstop. Cost bound per run: 2 vCPU and 8 GiB for an hour at most.
+#  - 8 GiB and 2 vCPU: measured at the first real run (2026-10-25), the two GLiNER models in fp32 plus torch peak at
+#    4.1 to 4.6 GiB, so 4 GiB was killed (signal 9). Cloud Run requires at least 2 vCPU above 4 GiB.
+#  - a job has no URL: nothing on the internet can reach it. Only anonymizer-scheduler may run it (below), and the
+#    maintainer by hand (docs/operations.md, "Run the anonymizer by hand").
 # ---------------------------------------------------------------------------------------------------------------------
-resource "google_cloud_run_v2_service" "anonymizer" {
+resource "google_cloud_run_v2_job" "anonymizer" {
   count = local.anonymizer_enabled ? 1 : 0
 
-  name                = "s1d1-anonymizer"
+  name                = "s1d1-anonymizer-job"
   location            = var.gcp_region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
   deletion_protection = false
 
   template {
-    service_account                  = google_service_account.anonymizer.email
-    timeout                          = "3600s"
-    max_instance_request_concurrency = 1
+    task_count  = 1
+    parallelism = 1
 
-    scaling {
-      min_instance_count = 0
-      max_instance_count = 2
-    }
+    template {
+      service_account = google_service_account.anonymizer.email
+      timeout         = "3600s"
+      max_retries     = 0
 
-    containers {
-      image = var.anonymizer_image
+      containers {
+        image   = var.anonymizer_image
+        command = ["python", "-m", "anonymizer.batch"]
 
-      resources {
-        # Measured at the first real run (2026-10-25): the two GLiNER models in fp32 plus torch peak at 4.1 to 4.6 GiB,
-        # so 4 GiB was killed (signal 9) and retried. Cloud Run requires at least 2 vCPU above 4 GiB.
-        limits = {
-          cpu    = "2"
-          memory = "8Gi"
-        }
-        cpu_idle          = true # CPU only while a request runs
-        startup_cpu_boost = true # the models load on the first event
-      }
-
-      env {
-        name  = "RAW_BUCKET"
-        value = google_storage_bucket.raw.name
-      }
-      env {
-        name  = "R2_ENDPOINT"
-        value = local.r2_endpoint
-      }
-      env {
-        name  = "R2_BUCKET"
-        value = cloudflare_r2_bucket.clean.name
-      }
-      env {
-        name  = "GLINER_MODEL_DIRS"
-        value = "/model/knowledgator,/model/urchade" # the image's default, written down so that it is visible here
-      }
-      env {
-        name  = "GLINER_THRESHOLD"
-        value = "0.5"
-      }
-      env {
-        name = "R2_ACCESS_KEY_ID"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.r2_access_key_id.secret_id
-            version = google_secret_manager_secret_version.r2_access_key_id.version
+        resources {
+          limits = {
+            cpu    = "2"
+            memory = "8Gi"
           }
         }
-      }
-      env {
-        name = "R2_SECRET_ACCESS_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.r2_secret_access_key.secret_id
-            version = google_secret_manager_secret_version.r2_secret_access_key.version
+
+        env {
+          name  = "RAW_BUCKET"
+          value = google_storage_bucket.raw.name
+        }
+        env {
+          name  = "MAX_PROMPTS"
+          value = tostring(var.anonymizer_max_prompts)
+        }
+        env {
+          name  = "MAX_SECONDS"
+          value = "3300"
+        }
+        env {
+          name  = "R2_ENDPOINT"
+          value = local.r2_endpoint
+        }
+        env {
+          name  = "R2_BUCKET"
+          value = cloudflare_r2_bucket.clean.name
+        }
+        env {
+          name  = "GLINER_MODEL_DIRS"
+          value = "/model/knowledgator,/model/urchade" # the image's default, written down so that it is visible here
+        }
+        env {
+          name  = "GLINER_THRESHOLD"
+          value = "0.5"
+        }
+        env {
+          name = "R2_ACCESS_KEY_ID"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.r2_access_key_id.secret_id
+              version = google_secret_manager_secret_version.r2_access_key_id.version
+            }
+          }
+        }
+        env {
+          name = "R2_SECRET_ACCESS_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.r2_secret_access_key.secret_id
+              version = google_secret_manager_secret_version.r2_secret_access_key.version
+            }
           }
         }
       }
@@ -318,98 +315,48 @@ resource "google_cloud_run_v2_service" "anonymizer" {
   ]
 }
 
-# The only principal that may invoke the service.
-resource "google_cloud_run_v2_service_iam_member" "eventarc_invokes" {
+# The only principal that may run the job (roles/run.invoker holds run.jobs.run), on this job only.
+resource "google_cloud_run_v2_job_iam_member" "scheduler_runs" {
   count = local.anonymizer_enabled ? 1 : 0
 
-  project  = google_cloud_run_v2_service.anonymizer[0].project
-  location = google_cloud_run_v2_service.anonymizer[0].location
-  name     = google_cloud_run_v2_service.anonymizer[0].name
+  project  = google_cloud_run_v2_job.anonymizer[0].project
+  location = google_cloud_run_v2_job.anonymizer[0].location
+  name     = google_cloud_run_v2_job.anonymizer[0].name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.eventarc_invoker.email}"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Eventarc: object finalized in the raw bucket -> POST / on the anonymizer, with an OIDC token of eventarc-invoker.
+# Cloud Scheduler: POST jobs/<name>:run on the Cloud Run Admin API with an OAuth token of anonymizer-scheduler.
+# "0 3 */2 * *" runs on the odd days of the month at 03:00 UTC: two runs are never more than 2 days apart (31 -> 1 is
+# 1 day, 27 Feb -> 1 Mar is 2), so every raw object is seen by at least one run before its 3-day deletion.
+# No retry: a missed run is caught up by the next one; a raw object it would have seen may then be deleted unseen.
 # ---------------------------------------------------------------------------------------------------------------------
-
-# The GCS service agent publishes the bucket events to the Pub/Sub topic that Eventarc creates for the trigger.
-# Created by the first apply already (it does not depend on the image), so that it has propagated when the trigger is
-# created; a trigger created right after it may still be refused until it does (a second apply then succeeds).
-resource "google_project_iam_member" "gcs_agent_publishes" {
-  project = var.gcp_project
-  role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${data.google_storage_project_service_account.gcs.email_address}"
-}
-
-# The identity of the trigger must be allowed to receive events.
-resource "google_project_iam_member" "eventarc_invoker_receives" {
+resource "google_cloud_scheduler_job" "anonymizer" {
   count = local.anonymizer_enabled ? 1 : 0
 
-  project = var.gcp_project
-  role    = "roles/eventarc.eventReceiver"
-  member  = "serviceAccount:${google_service_account.eventarc_invoker.email}"
-}
+  name      = "s1d1-anonymizer-every-2-days"
+  region    = var.gcp_region
+  schedule  = var.anonymizer_schedule
+  time_zone = "Etc/UTC"
 
-# The two Google-managed service agents that Eventarc needs. Both were granted by hand at the first deployment
-# (2026-10-25); Terraform now grants them, non-authoritatively, so a fresh install does not fail the same way.
-# A service agent exists only once its API is enabled (and sometimes only after first use): hence the dependency on the
-# API, and if an agent still does not exist, `gcloud beta services identity create --service=<api>` creates it
-# (the provider's google_project_service_identity is beta-only and the google-beta provider is not used here).
-
-# Eventarc's own agent: manages the trigger's Pub/Sub plumbing.
-resource "google_project_iam_member" "eventarc_agent" {
-  project = var.gcp_project
-  role    = "roles/eventarc.serviceAgent"
-  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
-
-  depends_on = [google_project_service.api["eventarc.googleapis.com"]]
-}
-
-# Pub/Sub's agent: signs the OIDC token of the push to Cloud Run on behalf of eventarc-invoker. Scoped to that one
-# service account: a project-level grant would let the agent impersonate every account of the project.
-resource "google_service_account_iam_member" "pubsub_agent_token_creator" {
-  service_account_id = google_service_account.eventarc_invoker.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
-
-  depends_on = [google_project_service.api["pubsub.googleapis.com"]]
-}
-
-resource "google_eventarc_trigger" "raw_finalized" {
-  count = local.anonymizer_enabled ? 1 : 0
-
-  name     = "s1d1-raw-finalized"
-  location = var.gcp_region # the bucket's region, lower case: the bucket reports its location in upper case (EUROPE-WEST1), which Eventarc rejects as "not found"
-
-  matching_criteria {
-    attribute = "type"
-    value     = "google.cloud.storage.object.v1.finalized"
-  }
-  matching_criteria {
-    attribute = "bucket"
-    value     = google_storage_bucket.raw.name
+  retry_config {
+    retry_count = 0
   }
 
-  destination {
-    cloud_run_service {
-      service = google_cloud_run_v2_service.anonymizer[0].name
-      region  = google_cloud_run_v2_service.anonymizer[0].location
-      path    = "/"
+  http_target {
+    http_method = "POST"
+    uri         = "https://run.googleapis.com/v2/projects/${var.gcp_project}/locations/${var.gcp_region}/jobs/${google_cloud_run_v2_job.anonymizer[0].name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
     }
   }
 
-  service_account = google_service_account.eventarc_invoker.email
-
-  # No retry_policy: the provider accepts only max_attempts = 1 there, and Eventarc's own default (Pub/Sub retry with
-  # a 10 s to 600 s backoff, messages kept 24 h) is what we want. See README.md ("Retries").
-
   depends_on = [
-    google_project_iam_member.gcs_agent_publishes,
-    google_project_iam_member.eventarc_invoker_receives,
-    google_project_iam_member.eventarc_agent,
-    google_service_account_iam_member.pubsub_agent_token_creator,
-    google_service_account_iam_member.terraform_acts_as_eventarc_invoker,
-    google_cloud_run_v2_service_iam_member.eventarc_invokes,
+    google_project_service.api,
+    google_service_account_iam_member.terraform_acts_as_scheduler,
+    google_cloud_run_v2_job_iam_member.scheduler_runs,
   ]
 }

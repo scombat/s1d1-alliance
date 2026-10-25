@@ -1,26 +1,32 @@
 # anonymizer
 
-The Cloud Run service that turns the raw captures into the clean corpus. Eventarc calls it when the ingest Worker
-writes an object `raw/YYYY/MM/DD/<uuid>.ndjson` to the raw Google Cloud Storage bucket; it reads the object, keeps the
-decision-11 keys of each line, anonymises the prompt, and writes `clean/YYYY/MM/DD/<same uuid>.ndjson` to the R2
-bucket `s1d1-clean`. What it misses stays in the corpus for good, so it is built for recall on personal data and
-secrets, it fails closed on what it cannot vouch for, and it is checked for leaving clean text alone.
+The Cloud Run Job that turns the raw captures into the clean corpus. Cloud Scheduler starts it every 2 days
+(`terraform/gcp.tf`); it reads the raw objects `raw/YYYY/MM/DD/<uuid>.ndjson` that the ingest Worker wrote to the raw
+Google Cloud Storage bucket, draws at most `MAX_PROMPTS` of their lines at random, keeps the decision-11 keys of each
+drawn line, anonymises the prompt, and writes `clean/YYYY/MM/DD/<same uuid>.ndjson` to the R2 bucket `s1d1-clean`.
+What it misses stays in the corpus for good, so it is built for recall on personal data and secrets, it fails closed
+on what it cannot vouch for, and it is checked for leaving clean text alone.
+
+Why a job and a draw (docs/31 of the project): the cost is then bounded per run, at most `MAX_PROMPTS` lines and one
+hour of 2 vCPU, whatever the traffic. Until 2026-10-25 an Eventarc trigger called it, as a Cloud Run service, on every
+raw object; that handler is still in `src/anonymizer/app.py` for a return to that mode, but nothing deploys it.
 
 The contract it reads is `contract/ingest-v1.md`; `contract/fixtures/valid.ndjson` gives
 `contract/fixtures/clean-expected.ndjson`.
 
 ## What it does
 
-1. `POST /` with the CloudEvent of Eventarc in binary mode: the body is the storage object (`bucket`, `name`), the
-   `ce-type` header is `google.cloud.storage.object.v1.finalized`.
-   - Eventarc retries every answer that is not 2xx, so an event that can never succeed is acknowledged with 204 and a
-     warning that quotes nothing from it: a body that is not a storage object or is over 1 MiB, another event type, an
-     object whose name is not `raw/YYYY/MM/DD/<uuid>.ndjson`, and an object of a bucket other than `RAW_BUCKET`
-     (the service only ever reads that one bucket, so it cannot be used to copy another).
-   - Without `RAW_BUCKET` set, a raw object is not read and the answer is 500 (a configuration error, retried until
-     it is fixed). Another path is a 404, another method a 405.
-2. Reads the object (`google-cloud-storage`, with the identity of the service), splits it into lines, and cleans each
-   line (`src/anonymizer/clean.py`). The prompt is first put in its canonical form (see "The canonical form" below):
+`python -m anonymizer.batch` (`src/anonymizer/batch.py`, the image's command):
+
+1. Lists the objects under `raw/` of `RAW_BUCKET` (`google-cloud-storage`, with the identity of the job) and keeps the
+   names `raw/YYYY/MM/DD/<uuid>.ndjson`. An object whose clean object already exists in R2 (HeadObject) is left out,
+   so a run never cleans an object twice, and a run started by hand right after another cleans nothing again.
+   **Draws** at most `MAX_PROMPTS` lines over all the other objects' lines, uniformly (a reservoir: one draw over all
+   lines, not per object, and memory holds `MAX_PROMPTS` lines however much was sent). A line not drawn is never
+   stored: its raw object is deleted by the bucket's 3-day lifecycle rule. An object with no line drawn has no clean
+   object, so a later run may still draw from it while it exists.
+2. Cleans the drawn lines in a random order (so that a deadline cuts a random part). Each line goes through
+   `src/anonymizer/clean.py`. The prompt is first put in its canonical form (see "The canonical form" below):
    that form is the one checked, anonymised and stored. A line is dropped, and counted, when it is not JSON, has no
    prompt or no string `id`, has a `source` other than `capture:community`, `capture:direct` or
    `capture:selfhosted:<lower-case uuid>`, has a `terms_version` other than `v` and 1 to 3 digits, has a canonical
@@ -42,14 +48,19 @@ The contract it reads is `contract/ingest-v1.md`; `contract/fixtures/valid.ndjso
    | `pred_score`, `pred_needs_tools`, `pred_confidence` | a finite number in [0, 1] (not a boolean), as a float, else null |
 
    Never `instance_id`, `received`, `variant`, `v`, an IP address or a header.
-3. A line that raises while it is cleaned is dropped and counted as `failed`, so one bad line cannot make the object
-   fail forever; when every line of an object raises (a broken model), the object fails with 500 and is retried.
-4. Writes the clean lines as one object to R2 (`boto3`, S3 API) under the same date and UUID. A rewrite replaces the
-   object, so an event delivered twice gives one clean object. An object with no good line writes nothing.
-5. Answers 204. A storage failure (read or write) answers 500, and Eventarc delivers the event again.
+3. A line that raises while it is cleaned is dropped and counted as `failed`; when every cleaned line raises (a broken
+   model), the run fails and writes nothing.
+4. **Stops cleaning at `MAX_SECONDS`** (3 300 s in production, under the job's 3 600 s timeout) and goes on to the
+   writes with what it kept, so a slow model bounds the run instead of making it longer.
+5. Writes, for each raw object with at least one kept line, its clean lines as one object to R2 (`boto3`, S3 API)
+   under the same date and UUID.
+6. Exits 0, or 1 when the run could not go through (storage, every line failing, a bad setting): the execution then
+   shows as failed in Cloud Run, and the next run, at most 2 days later, takes the objects up again.
 
-It never logs a prompt, a line or an error message: the log lines (JSON on stderr, for Cloud Logging) carry the object
-name, the counts (`kept`, `dropped`, `dropped_uncovered_script`, `failed`), and the class name of an error.
+It never logs a prompt, a line, an object name or an error message: the last log line (JSON on stderr, for Cloud
+Logging), `batch done`, carries counts only (`objects`, `already_clean`, `lines`, `drawn`, `cleaned`, `kept`,
+`dropped`, `dropped_uncovered_script`, `failed`, `written`, `deadline_reached`, `seconds`); a failure logs the class
+name of the error.
 
 ## The canonical form
 
@@ -90,7 +101,7 @@ gets the marker of the longest; a span is never dropped. The replacements are ma
 urchade's repository has no tokenizer; GLiNER takes it from `microsoft/mdeberta-v3-base` (MIT), whose commit
 `a0484667b22365f84929a935b5e50a51f71f159d` `scripts/fetch_models.py` checks before it saves the tokenizer into the
 model directory. That script is the only step that downloads: `uv run --extra model python scripts/fetch_models.py
-/model` gives `/model/knowledgator` and `/model/urchade`, each loadable offline (the service loads them with
+/model` gives `/model/knowledgator` and `/model/urchade`, each loadable offline (the job loads them with
 `local_files_only=True`).
 
 Both run at threshold 0.5 with the labels `person`, `address`, `phone number`, `email`, and `passport number`,
@@ -188,26 +199,29 @@ numbers taken for phones and public identifiers (video, document and account ids
 | name | default | role |
 |---|---|---|
 | `RAW_BUCKET` | (required) | the only bucket whose objects are read |
+| `MAX_PROMPTS` | `5000` | most lines drawn and cleaned by one run (Terraform: `anonymizer_max_prompts`) |
+| `MAX_SECONDS` | `3300` | the run stops cleaning after this many seconds and writes what it kept |
 | `R2_ENDPOINT` | | `https://<account>.r2.cloudflarestorage.com` (for a bucket in the EU jurisdiction: `https://<account>.eu.r2.cloudflarestorage.com`) |
 | `R2_BUCKET` | `s1d1-clean` | the clean bucket |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | | an R2 API token limited to that bucket (secrets, never in this repository) |
 | `GLINER_MODEL_DIRS` | `/model/knowledgator,/model/urchade` | the model directories, comma-separated (one model each) |
 | `GLINER_THRESHOLD` | `0.5` | the models' threshold |
 
-The raw bucket is read with the service account of Cloud Run (no key). The models, the GCS client and the R2 client are
-built on the first event that needs them.
+The raw bucket is read and listed with the job's service account (no key). The models are loaded once per run, after
+the draw, and only when a line was drawn.
 
 ## Dependencies
 
 Each one is in `pyproject.toml` and pinned in `uv.lock`.
 
-- `google-cloud-storage`: reads the raw bucket with the identity of the service (no key to store or rotate).
-- `boto3`: writes to R2 through its S3 API (request signing is not something to write by hand).
-- `uvicorn`: serves the ASGI application. The application itself is a plain ASGI callable, no web framework.
+- `google-cloud-storage`: lists and reads the raw bucket with the identity of the job (no key to store or rotate).
+- `boto3`: checks and writes R2 objects through its S3 API (request signing is not something to write by hand).
+- `uvicorn`: serves the Eventarc handler of `app.py`, kept for a return to one run per object (not deployed). The
+  application itself is a plain ASGI callable, no web framework.
 - The `model` extra, installed by the image, the slow tests and `scripts/fetch_models.py`, not by CI's fast tests:
   - `gliner`: loads and runs the GLiNER models; there is no other maintained implementation of its span decoding;
   - `torch`: needed by `gliner`; listed only so that `uv` takes it from the PyTorch CPU index (`[tool.uv.sources]`):
-    the service runs on CPU, and the PyPI Linux wheel would pull gigabytes of CUDA libraries.
+    the job runs on CPU, and the PyPI Linux wheel would pull gigabytes of CUDA libraries.
 - `pytest` (dev group only): the tests.
 
 `gliner`, `torch`, `google-cloud-storage` and `boto3` are imported inside the adapters only, so the fast tests need

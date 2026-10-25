@@ -44,7 +44,7 @@ output "artifact_registry_repository" {
   value       = "${google_artifact_registry_repository.s1d1.location}-docker.pkg.dev/${var.gcp_project}/${google_artifact_registry_repository.s1d1.repository_id}"
 }
 
-output "anonymizer_url" {
-  description = "Default URL of the anonymizer (null until anonymizer_image is set). Internal ingress only: it answers nothing from the internet."
-  value       = one(google_cloud_run_v2_service.anonymizer[*].uri)
+output "anonymizer_job" {
+  description = "Name of the anonymizer Cloud Run Job (null until anonymizer_image is set): gcloud run jobs execute <this> --region <gcp_region>."
+  value       = one(google_cloud_run_v2_job.anonymizer[*].name)
 }

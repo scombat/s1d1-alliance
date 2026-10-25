@@ -92,7 +92,7 @@ variable "gcp_project" {
 variable "gcp_region" {
   type        = string
   default     = "europe-west1"
-  description = "Region of the raw bucket, Cloud Run, Artifact Registry, the secrets and the Eventarc trigger (a Cloud Storage trigger must be in the bucket's region)."
+  description = "Region of the raw bucket, the Cloud Run Job, Cloud Scheduler, Artifact Registry and the secrets."
 }
 
 variable "billing_account" {
@@ -121,12 +121,29 @@ variable "anonymizer_image" {
   type        = string
   default     = null
   nullable    = true
-  description = "Image of the anonymizer, by digest: <region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>, built by CI from this repo and pushed to Artifact Registry. Null (the default, for the first apply) creates neither the Cloud Run service nor the Eventarc trigger nor their IAM bindings."
+  description = "Image of the anonymizer, by digest: <region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>, built by CI from this repo and pushed to Artifact Registry. Null (the default, for the first apply) creates neither the Cloud Run Job nor its schedule nor their IAM bindings."
 
   validation {
     condition     = var.anonymizer_image == null || can(regex("^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]{1,128})?@sha256:[0-9a-f]{64}$", var.anonymizer_image))
     error_message = "anonymizer_image must be null or given by digest (name@sha256:<64 hex>), so that a deployment is exactly the image built by CI from this repo."
   }
+}
+
+variable "anonymizer_max_prompts" {
+  type        = number
+  default     = 5000
+  description = "Most lines one run of the anonymizer job draws and cleans (MAX_PROMPTS). The rest of the raw lines are deleted unread at 3 days. Set from the time per prompt measured at the first run (docs/operations.md)."
+
+  validation {
+    condition     = var.anonymizer_max_prompts >= 1 && floor(var.anonymizer_max_prompts) == var.anonymizer_max_prompts
+    error_message = "anonymizer_max_prompts must be a whole number, 1 or more."
+  }
+}
+
+variable "anonymizer_schedule" {
+  type        = string
+  default     = "0 3 */2 * *"
+  description = "Cron (UTC) of the anonymizer job. Two runs must never be more than 2 days apart, or raw objects are deleted (3 days) before any run sees them."
 }
 
 variable "github_repository" {

@@ -2,7 +2,7 @@
 
 Infrastructure of the public instance `s1d1.qoo.gy`, in HCP Terraform (workspace `s1d1-alliance`).
 This folder holds the Cloudflare part (tunnel, DNS, Workers, routes, R2) and the Google Cloud part (raw
-bucket, service accounts, anonymizer on Cloud Run, Eventarc, budget, CI identity): `gcp.tf`, `budget.tf`, `wif.tf`.
+bucket, service accounts, anonymizer job on Cloud Run and its schedule, budget, CI identity): `gcp.tf`, `budget.tf`, `wif.tf`.
 
 Providers are pinned exactly: `cloudflare/cloudflare = 5.28.1`, `hashicorp/google = 8.8.1`, `hashicorp/random = 3.9.1`, `hetznercloud/hcloud = 1.70.1`
 (no `google-beta`: every resource used is GA). The lock file
@@ -53,12 +53,12 @@ terraform validate
 | `debug_cache_header` | no | `0` | `DEBUG_CACHE_HEADER`: `"1"` adds `x-s1d1-cache: HIT`/`MISS` to cached API answers (smoke tests only) |
 | `origin_requires_auth` | no | `0` | `ORIGIN_REQUIRES_AUTH`: `"1"` when the origin gates decisions behind a token; the site Worker then bypasses the cache |
 | `gcp_project` | no | none | Google Cloud project id; also names the raw bucket `<project>-s1d1-raw` (bucket names are global) |
-| `terraform_service_account` | no | none | email of the account HCP runs as (same as `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`); gets `roles/iam.serviceAccountUser` on `anonymizer` and `eventarc-invoker` only |
-| `gcp_region` | no | `europe-west1` | bucket, Cloud Run, Artifact Registry, secrets, Eventarc trigger |
+| `terraform_service_account` | no | none | email of the account HCP runs as (same as `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`); gets `roles/iam.serviceAccountUser` on `anonymizer` and `anonymizer-scheduler` only |
+| `gcp_region` | no | `europe-west1` | bucket, Cloud Run Job, Cloud Scheduler, Artifact Registry, secrets |
 | `billing_account` | no | none | billing account id (`000000-000000-000000`) for the budget |
 | `budget_amount` | no | `5` | monthly budget, whole units |
 | `budget_currency` | no | `EUR` | must be the currency of the billing account |
-| `anonymizer_image` | no | null | `<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>`, built by CI from this repo; a tag without a digest is refused. Null: no Cloud Run service, no Eventarc trigger, no anonymizer IAM bindings (first apply) |
+| `anonymizer_image` | no | null | `<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>`, built by CI from this repo; a tag without a digest is refused. Null: no Cloud Run Job, no schedule, no anonymizer IAM bindings (first apply) |
 | `github_repository` | no | `scombat/s1d1-alliance` | the repository whose `main` branch may push images |
 | `github_repository_owner_id` | no | empty | optional numeric id of the GitHub owner, added to the federation condition |
 | `hcloud_token` | yes | none | API token (Read & Write) of the Hetzner Cloud project that holds the node |
@@ -82,7 +82,7 @@ from the R2 API token of `cloudflare.tf`.
 
 Four outputs of the Google part are not sensitive: `ci_workload_identity_provider` and `ci_publisher_service_account`
 (the two inputs of `google-github-actions/auth`), `artifact_registry_repository` (where to push) and
-`anonymizer_url` (null until `anonymizer_image` is set). No GCP secret is an output; the HMAC secret only goes to the ingest Worker binding.
+`anonymizer_job` (the job's name, null until `anonymizer_image` is set). No GCP secret is an output; the HMAC secret only goes to the ingest Worker binding.
 
 `node_ipv4` (not sensitive) is the Hetzner node's IPv4 address; nothing listens on it.
 
@@ -146,48 +146,44 @@ provider (`assets.directory`); `run_worker_first = ["/", "/status.json", "/api/*
 ## What is created on Google Cloud
 
 ```
-ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anonymizer --S3--> R2 s1d1-clean
+ingest Worker --HMAC--> raw bucket <--reads-- anonymizer job --S3--> R2 s1d1-clean
+                                                  ^ every 2 days: Cloud Scheduler --OAuth--> jobs.run
 ```
 
-- **APIs** (`google_project_service`, never disabled on destroy): run, eventarc, pubsub, storage, secretmanager,
+- **APIs** (`google_project_service`, never disabled on destroy): run, cloudscheduler, storage, secretmanager,
   artifactregistry, iam, iamcredentials, sts, billingbudgets, cloudresourcemanager (`iam` is not in the brief but the
-  service accounts need it).
+  service accounts need it). eventarc and pubsub left the list with the Eventarc trigger (2026-10-25); leaving the
+  list does not disable them.
 - **Raw bucket** `<project>-s1d1-raw`, region `europe-west1`, uniform bucket-level access, public access prevention
   `enforced`, objects deleted at age 3 days. The soft-delete window is set to 0: the default 7 days would keep the
   deleted raw prompts recoverable for a week more.
-- **Service accounts**, one role each, all on the bucket or secret concerned and none at project level except the two
-  Eventarc ones:
+- **Service accounts**, one role each, all on the bucket, secret or job concerned, none at project level:
   - `ingest-writer`: `roles/storage.objectCreator` on the raw bucket only; an HMAC key for the Worker. It can neither
     read, list, overwrite nor delete.
-  - `anonymizer`: `roles/storage.objectViewer` on the raw bucket only, `roles/secretmanager.secretAccessor` on the
-    two R2 secrets only; it is the identity of the Cloud Run service.
-  - `eventarc-invoker`: `roles/run.invoker` on the service only, `roles/eventarc.eventReceiver` on the project.
-  - Terraform also grants two Google-managed service agents on the project: `roles/eventarc.serviceAgent` to the
-    Eventarc agent (`service-<project number>@gcp-sa-eventarc.iam.gserviceaccount.com`) and
-    `roles/iam.serviceAccountTokenCreator` to the Pub/Sub agent (`service-<project number>@gcp-sa-pubsub.iam.gserviceaccount.com`,
-    for the OIDC push to Cloud Run), **on the `eventarc-invoker` service account only**, never project-wide (a
-    project-level token creator could impersonate every account of the project). Terraform grants both; they were made
-    by hand at the first deployment, the token creator then at project level: remove that one (`gcloud projects
-    remove-iam-policy-binding … --role=roles/iam.serviceAccountTokenCreator`) once Terraform has applied the scoped one.
+  - `anonymizer`: `roles/storage.objectViewer` on the raw bucket only (read and list, never delete: the lifecycle
+    rule deletes), `roles/secretmanager.secretAccessor` on the two R2 secrets only; it is the identity of the job.
+  - `anonymizer-scheduler`: `roles/run.invoker` on the anonymizer job only (it holds `run.jobs.run`); it is the
+    identity of the Cloud Scheduler job.
   - `ci-publisher`: `roles/artifactregistry.writer` on the `s1d1` repository only (see below).
 - **Secrets** `r2-access-key-id`, `r2-secret-access-key` in Secret Manager, replicated in `europe-west1` only. The
-  service reads the pinned version, so a rotation (new R2 token) makes a new revision.
+  job reads the pinned version, so a rotation (new R2 token) changes the job.
 - **Artifact Registry** `s1d1` (Docker), with **no cleanup policy**: a DELETE rule by age would delete the deployed
-  image when no new one was pushed for that long (Cloud Run could then not start a new instance), and a KEEP rule
-  alone deletes nothing. Delete old images by hand (`gcloud artifacts docker images list` / `delete`) when the storage
-  cost matters, never the digest in `terraform/images.auto.tfvars`.
-- **Created only when `anonymizer_image` is set** (the second apply of `docs/operations.md`, section 3): the Cloud Run
-  service, its `run.invoker` binding, the anonymizer's bucket and secret bindings, `roles/eventarc.eventReceiver` of
-  `eventarc-invoker` and the Eventarc trigger. The GCS service agent's `roles/pubsub.publisher` is created by the first
-  apply, so that it has propagated when the trigger is created; a trigger refused on the service agent's permission
-  the first time succeeds on the next run.
-- **Cloud Run** `s1d1-anonymizer`: internal ingress, 0 to 2 instances, 2 vCPU, **8 GiB** (measured peak 4.1 to 4.6 GiB on 2026-10-25; Cloud Run needs 2 vCPU above 4 GiB), concurrency 1, timeout 3600 s,
-  CPU only during requests, startup CPU boost. Environment: `RAW_BUCKET`, `R2_ENDPOINT`, `R2_BUCKET=s1d1-clean`,
-  `GLINER_MODEL_DIRS` (the image default, spelled out), `GLINER_THRESHOLD=0.5`; `R2_ACCESS_KEY_ID` and
-  `R2_SECRET_ACCESS_KEY` from Secret Manager. Only `eventarc-invoker` may invoke it: there is no `allUsers` binding.
-- **Eventarc** `s1d1-raw-finalized`: `google.cloud.storage.object.v1.finalized` on the raw bucket, delivered to
-  `POST /` of the service with an OIDC token of `eventarc-invoker`. The GCS service agent has
-  `roles/pubsub.publisher` on the project (it publishes the bucket events).
+  image when no new one was pushed for that long (the job could then not start), and a KEEP rule alone deletes
+  nothing. Delete old images by hand (`gcloud artifacts docker images list` / `delete`) when the storage cost
+  matters, never the digest in `terraform/images.auto.tfvars`.
+- **Created only when `anonymizer_image` is set** (the second apply of `docs/operations.md`, section 3): the job, its
+  `run.invoker` binding, the Cloud Scheduler job and the anonymizer's bucket and secret bindings.
+- **Cloud Run Job** `s1d1-anonymizer-job` (`python -m anonymizer.batch`, `anonymizer/README.md`): one task, no
+  retry, timeout 3600 s, 2 vCPU, **8 GiB** (measured peak 4.1 to 4.6 GiB on 2026-10-25; Cloud Run needs 2 vCPU above
+  4 GiB). Environment: `RAW_BUCKET`, `MAX_PROMPTS` (`anonymizer_max_prompts`), `MAX_SECONDS=3300`, `R2_ENDPOINT`,
+  `R2_BUCKET=s1d1-clean`, `GLINER_MODEL_DIRS` (the image default, spelled out), `GLINER_THRESHOLD=0.5`;
+  `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` from Secret Manager. A job has no URL.
+- **Cloud Scheduler** `s1d1-anonymizer-every-2-days`: `anonymizer_schedule`, `0 3 */2 * *` UTC by default, the odd
+  days of the month, so two runs are never more than 2 days apart and every raw object is seen by at least one run
+  before its 3-day deletion. `POST https://run.googleapis.com/v2/projects/<project>/locations/<region>/jobs/s1d1-anonymizer-job:run`
+  with an OAuth token of `anonymizer-scheduler`, no retry.
+- **Cost bound**: one run every 2 days, each at most `anonymizer_max_prompts` lines and one hour of 2 vCPU and 8 GiB,
+  whatever the traffic (docs/31 of the project). The lines not drawn are deleted unread at 3 days.
 - **Budget** (`budget.tf`): 5 EUR a month on this project, alerts at 50, 90 and 100 % of the current spend, emailed to
   the billing account administrators and users (Cloud Billing's default recipients). It alerts and never stops anything.
 - **Workload Identity Federation** (`wif.tf`): pool `github`, OIDC provider `github-main` (issuer
@@ -196,39 +192,15 @@ ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anon
   `github_repository_owner_id` is set (GitHub advises it: a name can be released and re-registered by someone else).
   `ci-publisher` can be impersonated by `principalSet .../attribute.repository/<github_repository>` only.
 
-### Troubleshooting: a service agent does not exist
+### Leaving Eventarc (2026-10-25)
 
-If the apply fails on the two service-agent grants above because the agent does not exist yet, create it with
-`gcloud beta services identity create --service=eventarc.googleapis.com --project=<project>` (or
-`--service=pubsub.googleapis.com`) and run again. (The provider's `google_project_service_identity` is beta-only; the
-google-beta provider is not used.)
-
-### Ingress `INTERNAL_ONLY` and Eventarc
-
-Cloud Run accepts Eventarc and Pub/Sub subscriptions under the "internal" ingress setting, on two conditions stated by
-the documentation: the trigger is in the same project (or VPC Service Controls perimeter) as the service, and it calls
-the default `run.app` URL, not a custom domain (https://docs.cloud.google.com/run/docs/securing/ingress). Both hold
-here, so the service uses `INGRESS_TRAFFIC_INTERNAL_ONLY`. Consequences: `default_uri_disabled` must stay `false`
-(Eventarc uses that URL), and a request from the internet is refused by Google's front end whatever its token.
-This is checked against the documentation, not against a live project: the first apply is where it is proven. If the
-trigger shows delivery failures with 403/404 in Cloud Run's logs, that is the first thing to look at; the fallback
-is `INGRESS_TRAFFIC_ALL` with the same IAM (still no public invoker).
-
-### Retries
-
-`google_eventarc_trigger` accepts a `retry_policy` with `max_attempts = 1` only, and has no dead-letter field, so none is
-set. Eventarc then uses its default: the Pub/Sub subscription it manages retries every non-2xx answer with a backoff
-from 10 s to 600 s and keeps the message 24 h (https://docs.cloud.google.com/eventarc/docs/retry-events). The
-anonymizer already answers 204 to every event that can never succeed (wrong name, wrong bucket, bad body), so only a
-real failure (storage, configuration, a broken model) is retried. The cost of an object that fails for good is at most
-about 150 deliveries in the 24 h, each one possibly loading the models: watch Cloud Run's error rate. To change the
-policy or add a dead-letter topic, import the subscription (`terraform state show google_eventarc_trigger.raw_finalized`
-gives its name) into a `google_pubsub_subscription` with `ignore_changes = [push_config]`; the documentation above
-describes it.
-
-The subscription's acknowledgement deadline is not configurable here either. If an object takes longer to clean than
-that deadline, Pub/Sub may deliver it again while the first run goes on; the clean object is written under the same key,
-so the second run replaces it and nothing is duplicated, only compute is spent.
+The apply that brings the job destroys the Cloud Run service `s1d1-anonymizer`, its invoker binding, the Eventarc
+trigger `s1d1-raw-finalized`, the `eventarc-invoker` account and the grants made for it: `roles/eventarc.eventReceiver`,
+`roles/eventarc.serviceAgent` of the Eventarc agent, `roles/pubsub.publisher` of the Cloud Storage agent and the
+Pub/Sub agent's token creator on `eventarc-invoker`. If a project-level `roles/iam.serviceAccountTokenCreator` made by
+hand at the first deployment is still there for the Pub/Sub agent, remove it
+(`gcloud projects remove-iam-policy-binding … --role=roles/iam.serviceAccountTokenCreator`). The raw objects already
+cleaned by the service have their clean object in R2: the job leaves them out, so nothing is cleaned twice.
 
 ## Token permissions (`cloudflare_api_token`)
 
@@ -298,10 +270,15 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
    service account for HCP with: Project IAM
    Admin, Service Usage Admin, Storage Admin, **Storage HMAC Key Admin (`roles/storage.hmacKeyAdmin`)** (Storage Admin
    does not grant `storage.hmacKeys.create`: the first apply failed on the HMAC key without it), Service Account Admin,
-   Cloud Run Admin, Eventarc Admin, Pub/Sub Admin, Secret Manager Admin, Artifact Registry Administrator, Workload
-   Identity Pool Admin, `iam.serviceAccountUser` (at the project level for the first apply only: Terraform then grants it on `anonymizer` and `eventarc-invoker` and you remove the project-level one, see below), and Billing Account Costs Manager
+   Cloud Run Admin, **Cloud Scheduler Admin (`roles/cloudscheduler.admin`)**, Secret Manager Admin, Artifact Registry
+   Administrator, Workload Identity Pool Admin, `iam.serviceAccountUser` (at the project level for the first apply only:
+   Terraform then grants it on `anonymizer` and `anonymizer-scheduler` and you remove the project-level one, see
+   below), and Billing Account Costs Manager
    (or Billing Account Administrator) **on the billing account** for the budget. This account is the most powerful
    credential of the project: keep it out of the repository and rotate it.
+   An install made before 2026-10-25 has Eventarc Admin and Pub/Sub Admin instead of Cloud Scheduler Admin: add Cloud
+   Scheduler Admin **before** the apply that brings the job, and remove the two others only **after** it (that apply
+   still needs them to destroy the Eventarc trigger).
 
    Recommended way to give HCP that account: **dynamic provider credentials** (workload identity, no key to store). In
    a workload identity pool `hcp-terraform` (OIDC provider for `https://app.terraform.io`) with an attribute condition
@@ -325,7 +302,7 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
    `/status.json` takes its Tantive image from the `TANTIVE_IMAGE` line of `node/desired.env` (no variable any more):
    delete the `tantive_image` workspace variable in HCP after merge (an undeclared variable only gives a warning, but
    keep the workspace clean).
-4. **First image.** The image must exist in Artifact Registry before the Cloud Run service is created, so the first
+4. **First image.** The image must exist in Artifact Registry before the Cloud Run Job is created, so the first
    apply runs with `anonymizer_image` null (its default) and creates no anonymizer; the CI then pushes the image
    (`workflow_dispatch`), a pull request adds `terraform/images.auto.tfvars` with its digest, and the next apply
    creates the anonymizer. No `-target` is needed (the workspace is VCS-driven). Details: `docs/operations.md`,
