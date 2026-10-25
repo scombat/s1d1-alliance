@@ -9,12 +9,17 @@ secret. Component details live next to the code: [terraform/README.md](../terraf
 
 Done once, outside Terraform:
 
-1. **Cloudflare**: the account, the zone `qoo.gy`, R2 enabled on the account, and a provider token with the
-   permissions listed in `terraform/README.md` ("Token permissions").
+1. **Cloudflare**: the account, the zone `qoo.gy`, R2 enabled on the account, **Analytics Engine enabled once** in the
+   dashboard (Workers & Pages, Analytics Engine; otherwise the first apply fails with error 10089 on the `VISITS`
+   binding), and a provider token with the permissions listed in `terraform/README.md` ("Token permissions"). Terraform
+   manages no zone ruleset: the zone's single free rate limiting rule belongs to another subdomain.
 2. **Google Cloud**: a project with billing linked; `serviceusage.googleapis.com` and
    `cloudresourcemanager.googleapis.com` enabled; a service account for HCP with the roles listed in
-   `terraform/README.md` ("Manual steps", item 3), including a billing role **on the billing account**. It is the most
-   powerful credential of the project: keep it out of the repository and rotate it.
+   `terraform/README.md` ("Manual steps", item 3), including **`roles/storage.hmacKeyAdmin`** (`roles/storage.admin`
+   does not grant `storage.hmacKeys.create`) and a billing role **on the billing account**. It is the most powerful
+   credential of the project: keep it out of the repository and rotate it. The recommended way to give it to HCP is
+   dynamic provider credentials (workload identity pool `hcp-terraform`, with a condition on organization `scombat`
+   and workspace `s1d1-alliance`); the maintainer used that path.
 3. **HCP Terraform**: an organisation (the workspace is created below).
 4. **Hetzner Cloud**: an account and a project, and in that project an API token with **Read & Write** permission
    (Security, API tokens), set as `hcloud_token` (sensitive) in HCP. The node is a paid server (about 6 EUR excluding
@@ -28,7 +33,10 @@ Done once, outside Terraform:
 2. Settings, General: **Terraform Working Directory = `terraform`**, and keep the **VCS root = the repository root**.
    The configuration reads `../workers/*` and `../site`; a workspace that uploads only `terraform/` fails at plan.
 3. Set the workspace variables below. Sensitive ones are marked as such in HCP (write-only afterwards).
-   Google credentials: `GOOGLE_CREDENTIALS` (environment variable, sensitive) or dynamic provider credentials.
+   Google credentials, recommended: dynamic provider credentials, i.e. the environment variables
+   `TFC_GCP_PROVIDER_AUTH` = `true`, `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL` and `TFC_GCP_WORKLOAD_PROVIDER_NAME` (pool
+   `hcp-terraform`, condition on organization `scombat` and workspace `s1d1-alliance`). Alternative: `GOOGLE_CREDENTIALS`
+   (environment variable, sensitive), a long-lived key.
 
 | variable | sensitive | note |
 |---|---|---|
@@ -40,7 +48,8 @@ Done once, outside Terraform:
 | `budget_currency` | no | must equal the billing account currency (default `EUR`) |
 | `anonymizer_image` | no | not set by hand: it comes from `terraform/images.auto.tfvars` (section 3); absent (null) on the first apply |
 | `hcloud_token` | **yes** | Read & Write API token of the Hetzner Cloud project |
-| `GOOGLE_CREDENTIALS` | **yes** | environment variable, if not using dynamic credentials |
+| `TFC_GCP_PROVIDER_AUTH`, `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`, `TFC_GCP_WORKLOAD_PROVIDER_NAME` | no | environment variables of the dynamic provider credentials (recommended) |
+| `GOOGLE_CREDENTIALS` | **yes** | environment variable, only if not using dynamic credentials |
 
 Optional, with defaults: `deploy_version`, `status_commit`, `tantive_image`, `status_model`, `maintenance`, `cache_ttl`,
 `debug_cache_header`, `origin_requires_auth`, `gcp_region`, `budget_amount`, `github_repository`, `github_repository_owner_id` (set it: the numeric owner id),
@@ -185,8 +194,13 @@ These were verified against documentation only; the first deploy is where they a
 5. **Eventarc reaches the `INTERNAL_ONLY` Cloud Run service**: that object produces a clean one within a minute or two. If
    Cloud Run logs show 403/404 deliveries, see "Ingress INTERNAL_ONLY and Eventarc" in `terraform/README.md` for the
    fallback.
-6. **Rate limit counts the Worker subrequest**: 101 requests in 10 s to `/api/v1/models` from one IP get blocked, and
-   the count is not doubled by the Worker's own subrequest to the zone.
+6. **`/api` rate limit (Worker binding `API_BURST`)**: check that the apply accepts the `ratelimit` binding of
+   `s1d1-site` (namespace id 1003). Then send 101 `GET /api/v1/models` in 10 s from one IP: the last ones get 429
+   `rate_limited` with `Retry-After: 10` and never reach the origin, while `GET /` and `/status.json` stay 200. The
+   limit is approximate and per location, so expect a few requests of margin, and the Worker's own subrequest to the
+   origin must not double the count. The zone has no rate limit rule of ours: do not look for one in the dashboard
+   (the single rule there is the other subdomain's). Known trade-off: when the Workers daily request quota is
+   exhausted the route fails open and `/api/*` goes to the tunnel with no rate limit.
 7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
    `container/memory/utilizations`) and compare with the 4 GiB limit; adjust only on that reading.
 8. **Ingest rate limits (to verify at the first apply)**: the Cloudflare page on the Workers Rate Limiting binding does
@@ -211,7 +225,7 @@ From docs/26 section 5, after the checks of tasks 9 and 10 (the full text is in 
 - **Question 4, route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
   apply.
 - **Live behaviours not provable offline**: the eight smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
-  Eventarc, R2 EU write, GCS PUT, rate limit with the subrequest, peak memory, ingest rate limits).
+  Eventarc, R2 EU write, GCS PUT, `/api` rate limit, peak memory, ingest rate limits).
 - **Eventarc retries**: the policy cannot be tuned in this provider version (`max_attempts = 1` only, no dead letter);
   a permanently failing object can be redelivered for 24 h. Watch Cloud Run's error rate.
 - **Legal texts**: the three French pages are templates until the lawyer has written and reviewed them; the licence of this

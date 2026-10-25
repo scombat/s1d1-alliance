@@ -32,32 +32,12 @@ resource "cloudflare_workers_route" "ingest" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Rate limit: one rule (the Free plan allows one), 100 requests per 10 s per IP on /api/*, blocked for 10 s.
-# cf.colo.id is mandatory in the API and implicit in the dashboard: the count is per IP and per data centre.
+# No zone ruleset here, on purpose. The /api rate limit is the API_BURST binding of the site Worker (workers.tf).
+# The Free plan allows a single rate limiting rule per zone, and the zone's `http_ratelimit` entrypoint ruleset
+# already exists and holds the rule of another subdomain. Declaring a `cloudflare_ruleset` for that phase fails
+# (error 20217) and importing the entrypoint would put someone else's rule under this state: never do either.
+# workers/site/test/terraform.test.js fails the build if a cloudflare_ruleset resource appears in terraform/*.tf.
 # ---------------------------------------------------------------------------------------------------------------------
-resource "cloudflare_ruleset" "rate_limit" {
-  zone_id     = var.cloudflare_zone_id
-  name        = "s1d1 API rate limit"
-  description = "100 requests per 10 s per IP on /api/*, blocked for 10 s"
-  kind        = "zone"
-  phase       = "http_ratelimit"
-
-  rules = [
-    {
-      ref         = "s1d1_api_rate_limit"
-      description = "API: 100 requests / 10 s / IP"
-      expression  = "starts_with(http.request.uri.path, \"/api/\")"
-      action      = "block"
-      enabled     = true
-      ratelimit = {
-        characteristics     = ["cf.colo.id", "ip.src"]
-        period              = 10
-        requests_per_period = 100
-        mitigation_timeout  = 10
-      }
-    },
-  ]
-}
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Secret shared by the community node (S1D1_CAPTURE_TOKEN) and the ingest Worker (COMMUNITY_TOKEN).

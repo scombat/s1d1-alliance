@@ -17,6 +17,7 @@ No build step and no npm dependency: ES modules, tested on Node 22.
 | `GET /api/v1/models`, `/api/models` | relayed, not cached |
 | a listed path with the wrong method | 405 with `Allow` |
 | any other `/api/*` (`/api/metrics`, `/api/info`, `/api/health`, `/api/v1/systemone/x`, trailing slash, ...) | 404, the origin is not called |
+| a listed path, client IP over 100 requests per 10 s | 429 `{"error": "rate_limited"}`, `Retry-After: 10`; the body is not read, the cache and the origin are not touched |
 | a `POST` body over 1 MiB (1 048 576 bytes) | 413, the origin is not called |
 | anything else (`/llms.txt`, legal pages, ...) | `ASSETS` |
 
@@ -44,11 +45,35 @@ never cached. An unreachable origin, or an origin body that fails while it is re
 | `CACHE_TTL` | variable | seconds, `86400` by default (Terraform refuses 0 or less) |
 | `DEBUG_CACHE_HEADER` | variable | `"1"` adds `x-s1d1-cache: HIT` or `MISS`; anything else (Terraform's default `"0"`) leaves it out |
 | `ORIGIN_REQUIRES_AUTH` | variable | `"1"` turns the cache off entirely (no match, no put); Terraform's default is `"0"` |
+| `API_BURST` | rate limit binding | Workers Rate Limiting, 100 per 10 s per client IP, namespace `1003`. Optional: if it is missing, or throws, the request goes on (fail open) |
 | `MAINTENANCE` | variable | `"1"` to answer 503 on `/api/*` |
 | `STATUS_COMMIT`, `STATUS_TANTIVE_IMAGE`, `STATUS_MODEL` | variables | what `/status.json` reports |
 
 Routes: `s1d1.qoo.gy/*` for this Worker, with `s1d1.qoo.gy/ingest` for the ingest Worker (the more specific route
 wins). No secret is needed here.
+
+## Rate limit
+
+`/api/*` is limited per client IP (`cf-connecting-ip`, `unknown` when absent) by the `API_BURST`
+[Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) binding:
+100 requests per 10 s. The landing, `/status.json` and the static assets are never limited.
+
+- The check comes after maintenance and the allow-list (an unknown path is still a 404, a wrong method a 405, and
+  neither uses budget) and before the body is read and the cache is consulted. A cache HIT counts like any other
+  request: the limit protects the edge as well as the origin.
+- Over the limit: 429 `{"error": "rate_limited"}` with `Retry-After: 10`; the origin is not called and the cache is
+  not consulted.
+- A missing or throwing binding fails open, with one log line that names the binding and holds no request data.
+- The count is approximate and per Cloudflare location (the binding is eventually consistent), like the ingest limits.
+- **There is no zone rule.** The zone `qoo.gy` allows a single rate limiting rule on the Free plan and it is already
+  used by another subdomain; Terraform must never manage that zone ruleset (`terraform/cloudflare.tf`).
+- **Known trade-off.** When the Workers daily request quota is exhausted, the route fails open (section "Manual steps"
+  of `terraform/README.md`): `/api/*` then goes straight to the tunnel, with no allow-list in the Worker and no rate
+  limit. The tunnel ingress still lists the API paths only, and the deadline shedding of tantive still protects
+  its capacity.
+- Terraform: `{ name = "API_BURST", type = "ratelimit", namespace_id = "1003", simple = { limit = 100, period = 10 } }`
+  on the Worker's `bindings`; `test/terraform.test.js` checks it stays declared and that no `cloudflare_ruleset`
+  exists.
 
 ## Why the cache key is the exact body
 

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 
 import worker, { handle } from "../src/index.js";
@@ -18,13 +18,14 @@ const baseEnv = {
 const DECISION = JSON.stringify({ tier: "mid", score: 0.42 });
 
 /** Fakes: the Cache API (only GET keys), the origin, ASSETS and the Analytics Engine dataset. */
-function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {} } = {}) {
+function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {}, limitSuccess = true } = {}) {
   const store = new Map();
   const puts = [];
   const originCalls = [];
   const assetCalls = [];
   const points = [];
   const matches = [];
+  const limitKeys = [];
   const cache = {
     match: async (req) => {
       matches.push(req.url);
@@ -54,11 +55,12 @@ function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {} }
     ...baseEnv,
     ASSETS: { fetch: async (req) => (assetCalls.push(new URL(req.url).pathname), new Response("asset")) },
     VISITS: { writeDataPoint: (p) => points.push(p) },
+    API_BURST: { limit: async ({ key }) => (limitKeys.push(key), { success: limitSuccess }) },
   };
   const waits = [];
   const ctx = { waitUntil: (p) => waits.push(p) };
   const settle = () => Promise.all(waits);
-  return { cache, fetch, env, ctx, settle, store, puts, matches, originCalls, assetCalls, points };
+  return { cache, fetch, env, ctx, settle, store, puts, matches, originCalls, assetCalls, points, limitKeys };
 }
 
 const api = (path, body = "{}", { method = "POST", headers = {} } = {}) =>
@@ -312,6 +314,107 @@ test("a hit is not served during maintenance", async () => {
   await f.settle();
   const res = await run(f, api("/api/classify", "{}"), { MAINTENANCE: "1" });
   assert.equal(res.status, 503);
+});
+
+// ---- /api rate limit (API_BURST binding) --------------------------------------------------------------------
+
+test("over the limit: 429 rate_limited, Retry-After 10, the origin and the cache are not touched", async () => {
+  const f = fakes({ limitSuccess: false });
+  const res = await run(f, api("/api/v1/decisions", '{"prompt":"hello"}'));
+  assert.equal(res.status, 429);
+  assert.equal(res.headers.get("retry-after"), "10");
+  assert.equal(res.headers.get("content-type"), "application/json");
+  assert.deepEqual(await res.json(), { error: "rate_limited" });
+  await f.settle();
+  assert.equal(f.originCalls.length, 0);
+  assert.equal(f.matches.length, 0, "the cache is not consulted");
+  assert.equal(f.puts.length, 0);
+  // GET /api/v1/models is limited too
+  const get = await run(f, api("/api/v1/models", "", { method: "GET" }));
+  assert.equal(get.status, 429);
+  assert.equal(f.originCalls.length, 0);
+});
+
+test("over the limit: the body is not read", async () => {
+  const f = fakes({ limitSuccess: false });
+  const req = api("/api/v1/decisions", "{}");
+  const res = await run(f, req);
+  assert.equal(res.status, 429);
+  assert.equal(req.bodyUsed, false);
+});
+
+test("under the limit: the request goes through as usual, with the limiter asked once", async () => {
+  const f = fakes();
+  const res = await run(f, api("/api/v1/decisions", '{"prompt":"hello"}'));
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), DECISION);
+  assert.equal(f.originCalls.length, 1);
+  assert.equal(f.limitKeys.length, 1);
+});
+
+test("the limit key is cf-connecting-ip, then \"unknown\"", async () => {
+  const f = fakes();
+  await run(f, api("/api/classify", "{}", { headers: { "cf-connecting-ip": "203.0.113.9" } }));
+  await run(f, api("/api/classify", "{}"));
+  assert.deepEqual(f.limitKeys, ["203.0.113.9", "unknown"]);
+});
+
+test("a cache HIT is counted too: the limiter is asked before the cache lookup", async () => {
+  const f = fakes();
+  await run(f, api("/api/classify", '{"a":1}'));
+  await f.settle();
+  assert.equal(f.limitKeys.length, 1);
+  const hit = await run(f, api("/api/classify", '{"a":1}'));
+  assert.equal(hit.status, 200);
+  assert.equal(f.originCalls.length, 1, "served from the cache");
+  assert.equal(f.limitKeys.length, 2, "the hit used budget");
+  // and a limited caller does not get the cached answer
+  f.env.API_BURST = { limit: async () => ({ success: false }) };
+  const limited = await run(f, api("/api/classify", '{"a":1}'));
+  assert.equal(limited.status, 429);
+});
+
+test("the landing, assets and /status.json are never limited", async () => {
+  const f = fakes({ limitSuccess: false });
+  for (const p of ["/", "/status.json", "/llms.txt", "/style.css", "/ingest"]) {
+    const res = await run(f, new Request(`https://s1d1.qoo.gy${p}`));
+    assert.equal(res.status, 200, p);
+  }
+  assert.equal(f.limitKeys.length, 0);
+});
+
+test("an unknown /api path is 404 and a wrong method is 405, without asking the limiter; maintenance too", async () => {
+  const f = fakes({ limitSuccess: false });
+  assert.equal((await run(f, api("/api/metrics"))).status, 404);
+  assert.equal((await run(f, api("/api/v1/decisions", "", { method: "GET" }))).status, 405);
+  assert.equal((await run(f, api("/api/v1/decisions", "{}"), { MAINTENANCE: "1" })).status, 503);
+  assert.equal(f.limitKeys.length, 0);
+});
+
+test("a missing or throwing API_BURST binding fails open with one log line and no request data", async () => {
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    const f = fakes();
+    const missing = { ...f.env };
+    delete missing.API_BURST;
+    const req = api("/api/v1/decisions", '{"prompt":"secret"}', { headers: { "cf-connecting-ip": "203.0.113.9" } });
+    const res = await handle(req, missing, f.ctx, { fetch: f.fetch, cache: f.cache });
+    assert.equal(res.status, 200);
+    assert.equal(warn.mock.callCount(), 1);
+
+    const throwing = { ...f.env, API_BURST: { limit: async () => { throw new Error("rate limit down 203.0.113.9"); } } };
+    const res2 = await handle(api("/api/v1/decisions", '{"prompt":"other"}', { headers: { "cf-connecting-ip": "203.0.113.9" } }), throwing, f.ctx, { fetch: f.fetch, cache: f.cache });
+    assert.equal(res2.status, 200);
+    assert.equal(warn.mock.callCount(), 2);
+
+    for (const call of warn.mock.calls) {
+      assert.equal(call.arguments.length, 1);
+      assert.match(call.arguments[0], /API_BURST/);
+      assert.doesNotMatch(call.arguments[0], /203\.0\.113|secret|prompt/);
+    }
+  } finally {
+    warn.mock.restore();
+  }
 });
 
 test("/ writes one visit point with the country only", async () => {

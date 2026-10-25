@@ -56,6 +56,9 @@ resource "cloudflare_workers_script" "site" {
     { name = "STATUS_COMMIT", type = "plain_text", text = var.status_commit },
     { name = "STATUS_TANTIVE_IMAGE", type = "plain_text", text = var.tantive_image },
     { name = "STATUS_MODEL", type = "plain_text", text = var.status_model },
+    # Rate limit of /api/*, per client IP (approximate, per Cloudflare location). There is no zone ruleset for it: see
+    # cloudflare.tf. Namespace ids are unique in the account (1001 and 1002 are the ingest Worker's).
+    { name = "API_BURST", type = "ratelimit", namespace_id = "1003", simple = { limit = 100, period = 10 } },
   ]
 }
 
@@ -100,8 +103,8 @@ resource "cloudflare_workers_script" "ingest" {
   ]
 }
 
-# A Worker that is also reachable on workers.dev would bypass the zone's rate limit rule: keep both off the
-# workers.dev subdomain, they are served by the routes only.
+# A Worker that is also reachable on workers.dev would be reached without the hostname's route and its protections
+# (maintenance, rate limits): keep both off the workers.dev subdomain, they are served by the routes only.
 resource "cloudflare_workers_script_subdomain" "site" {
   account_id       = var.cloudflare_account_id
   script_name      = cloudflare_workers_script.site.script_name

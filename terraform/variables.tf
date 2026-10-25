@@ -5,7 +5,7 @@ variable "cloudflare_account_id" {
 
 variable "cloudflare_zone_id" {
   type        = string
-  description = "Zone id of qoo.gy (DNS record, Worker routes, rate limit ruleset)."
+  description = "Zone id of qoo.gy (DNS record, Worker routes)."
 }
 
 variable "cloudflare_api_token" {
