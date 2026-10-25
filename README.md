@@ -6,7 +6,7 @@ The free community instance of the s1d1 prompt router, at <https://s1d1.qoo.gy>.
 anonymiser, the Terraform for Cloudflare, Google Cloud and Hetzner Cloud, and the Compose file of a community node.
 Nothing runs there that is not in this repository, and nothing in this repository is a secret.
 
-**Status:** built and reviewed, not deployed yet (see [docs/operations.md](docs/operations.md)).
+**Status:** live since 2026-10-25 at <https://s1d1.qoo.gy> (see [docs/operations.md](docs/operations.md) to run your own).
 
 **Licence:** Apache-2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)); the legal pages of the site are not covered. See [Licences of the s1d1 projects](#licences-of-the-s1d1-projects).
 
@@ -18,8 +18,9 @@ Nothing runs there that is not in this repository, and nothing in this repositor
           │ /                      │ /api/*                        │ /ingest
           ▼                        ▼                              ▼
      static landing           Worker "site"                  Worker "ingest"
-     + /status.json           closed paths, 100 req/10 s     bounded batches,
-                              per IP, cache by SHA-256,      fail closed
+     + /status.json           closed paths, ~100 req/10 s    bounded batches,
+                              per IP (approximate),          fail closed
+                              cache by SHA-256,                    │
                               fail open                            │
                                    │ miss                          │
                                    ▼                               ▼
@@ -35,11 +36,13 @@ Nothing runs there that is not in this repository, and nothing in this repositor
 ```
 
 - The landing is static. `/status.json` says what runs; `/llms.txt` is the guide for agents.
-- `/api/*` accepts a closed list of paths only. Anything else answers 404. It is limited to 100 requests per 10 s per
-  IP, by the `site` Worker itself (a Workers Rate Limiting binding, not a zone rule).
+- `/api/*` accepts a closed list of paths only. Anything else answers 404. It is limited to about 100 requests per 10 s per
+  IP (approximate), by the `site` Worker itself (a Workers Rate Limiting binding, not a zone rule). Cloudflare counts
+  per location, and at small scale the binding was measured not to block: treat the number as a target, not a guarantee.
 - Only the paths of the API leave the Cloudflare Tunnel; the nodes publish no port.
-- A prompt goes to the raw bucket for 3 days, then is anonymised into the clean bucket. The clean copy keeps no
-  instance identifier, no IP address and no headers. The contract is in `contract/ingest-v1.md`.
+- A prompt lands in the raw bucket, and the object creation triggers the anonymiser (Eventarc, then Cloud Run) at once,
+  which writes the clean copy to the clean bucket. The raw copy is deleted after 3 days (4 at most, the deletion is
+  asynchronous). The clean copy keeps no instance identifier, no IP address and no headers. The contract is in `contract/ingest-v1.md`.
 - Each node pulls its own images by digest and checks their cosign signature before it starts them.
 
 ## Manual prerequisites

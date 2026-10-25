@@ -103,13 +103,13 @@ by hand when the storage cost matters, never the digest in `terraform/images.aut
 
 - **Route failure mode** (`cloudflare_workers_route` has no such field). Dashboard: Workers & Pages, the Worker,
   Settings, Domains & Routes, the route, "Failure mode".
-  - `s1d1.qoo.gy/*` (the `s1d1-site` Worker): **fail open** (docs/26 decision 22). If the Worker cannot run
+  - `s1d1.qoo.gy/*` (the `s1d1-site` Worker): **fail open**. If the Worker cannot run
     (for example its quota is exhausted), the request goes straight to the tunnel. This is safe because the tunnel's own
     ingress still lists only the API paths and answers 404 for everything else, `/metrics` included; what is lost is the
     cache, the maintenance switch and the landing, which is accepted.
   - `s1d1.qoo.gy/ingest` (the `s1d1-ingest` Worker): **fail closed**. Failing open would send `/ingest` to a
     tunnel that does not serve it; closed returns a Cloudflare 1027 page and tantive retries.
-  Check both after every apply (open question 4 of docs/26).
+  Check both after every apply (the failure mode can only be set in the dashboard).
 - **workers.dev**: both Workers have it disabled by Terraform. If the apply fails on those resources because the account
   has no workers.dev subdomain, see `terraform/README.md`.
 - **Cloudflare Access** (optional, for `/metrics`, section 8): an Access application on the tunnel hostname you choose.
@@ -236,15 +236,16 @@ a deliberate privacy-over-coverage choice: say it when presenting the corpus.
 
 ## 11. Questions still open
 
-From docs/26 section 5, after the checks of tasks 9 and 10 (the full text is in the s1d1-model-router repository):
+Open points of the live instance (it has been running since 2026-10-25):
 
-- **Question 4, route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
+- **Route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
   apply.
 - **Live behaviours not provable offline**: the eight smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
   Eventarc, R2 EU write, GCS PUT, `/api` rate limit, peak memory, ingest rate limits).
 - **Eventarc retries**: the policy cannot be tuned in this provider version (`max_attempts = 1` only, no dead letter);
   a permanently failing object can be redelivered for 24 h. Watch Cloud Run's error rate.
-- **Legal texts**: the three French pages are templates until the lawyer has written and reviewed them; the licence of this
-  repository is the maintainer's decision.
-- **tantive 0.8.0 digests**: `node/desired.env` and `node/example.env` carry placeholders until it is published.
-- **Cache lifetime**: `CACHE_TTL` is 86 400 s by the builder's choice (docs/26 section 4); revisit with real traffic.
+- **Legal texts**: the three French pages of the site (terms, privacy, legal notice) are written and were reviewed by the
+  maintainer's lawyer. An English courtesy translation of the terms, with the French text prevailing, is not done.
+- **Pinned images**: `node/desired.env` and `node/example.env` carry the real tantive 0.8.1 digest; a new release goes
+  through a pull request on `node/desired.env`.
+- **Cache lifetime**: `CACHE_TTL` is 86 400 s by choice; revisit with real traffic.
