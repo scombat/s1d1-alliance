@@ -18,8 +18,8 @@ Nothing runs there that is not in this repository, and nothing in this repositor
           │ /                      │ /api/*                        │ /ingest
           ▼                        ▼                              ▼
      static landing           Worker "site"                  Worker "ingest"
-     + /status.json           closed paths, ~100 req/10 s    bounded batches,
-                              per IP (approximate),          fail closed
+     + /status.json           closed paths, 30 req/10 s      bounded batches,
+                              and 1 000/h per client,        fail closed
                               cache by SHA-256,                    │
                               fail open                            │
                                    │ miss                          │
@@ -36,9 +36,9 @@ Nothing runs there that is not in this repository, and nothing in this repositor
 ```
 
 - The landing is static. `/status.json` says what runs; `/llms.txt` is the guide for agents.
-- `/api/*` accepts a closed list of paths only. Anything else answers 404. It is limited to about 100 requests per 10 s per
-  IP (approximate), by the `site` Worker itself (a Workers Rate Limiting binding, not a zone rule). Cloudflare counts
-  per location, and at small scale the binding was measured not to block: treat the number as a target, not a guarantee.
+- `/api/*` accepts a closed list of paths only. Anything else answers 404. It is limited to 30 requests per 10 s and 1 000 per
+  hour per client, by the `site` Worker itself: a Durable Object counter (`workers/limiter`), not a zone rule. The
+  client is named by an HMAC of its IP, which is never stored.
 - Only the paths of the API leave the Cloudflare Tunnel; the nodes publish no port.
 - A prompt lands in the raw bucket, and the object creation triggers the anonymiser (Eventarc, then Cloud Run) at once,
   which writes the clean copy to the clean bucket. The raw copy is deleted after 3 days (4 at most, the deletion is

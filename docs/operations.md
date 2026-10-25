@@ -203,28 +203,26 @@ These were verified against documentation only; the first deploy is where they a
 5. **Eventarc reaches the `INTERNAL_ONLY` Cloud Run service**: that object produces a clean one within a minute or two. If
    Cloud Run logs show 403/404 deliveries, see "Ingress INTERNAL_ONLY and Eventarc" in `terraform/README.md` for the
    fallback.
-6. **`/api` rate limit (Worker binding `API_BURST`)**: check that the apply accepts the `ratelimit` binding of
-   `s1d1-site` (namespace id 1003). Then send 101 `GET /api/v1/models` in 10 s from one IP: the last ones get 429
-   `rate_limited` with `Retry-After: 10` and never reach the origin, while `GET /` and `/status.json` stay 200. The
-   limit is approximate and per location, so expect a few requests of margin, and the Worker's own subrequest to the
-   origin must not double the count. The zone has no rate limit rule of ours: do not look for one in the dashboard
-   (the single rule there is the other subdomain's). Known trade-off: when the Workers daily request quota is
-   exhausted the route fails open and `/api/*` goes to the tunnel with no rate limit.
-   **Done 2026-10-25: not enforced.** 430 requests to `/api` from one IP (110 in under 1 s, 320 over 8 s) were all
-   accepted; the Workers logs show `API_BURST` was called and never logged missing or failing, so it answered
-   "allowed". The binding stays (no effect for now), no other edge limit during the first period, tantive's deadline
-   shedding protects capacity; a Durable Object limiter if the analytics show abuse.
+6. **`/api` rate limit (the `Limiter` Durable Object, docs/31 of the project)**: check that the apply creates the
+   `s1d1-limiter` Worker with its `Limiter` class and accepts the `LIMITER` binding of `s1d1-site`. Then send 40
+   `GET /api/v1/models` in under 10 s from one IP: the first 30 get 200, the next ones 429 `rate_limited` with a
+   `Retry-After` of 10 or less, and never reach the origin, while `GET /` and `/status.json` stay 200. After the
+   `Retry-After`, a request gets 200 again. The Workers logs must hold no `api: limiter is missing` or
+   `api: limiter failed` line. The zone has no rate limit rule of ours: do not look for one in the dashboard (the
+   single rule there is the other subdomain's). Known trade-off: when the Workers daily request quota is exhausted the
+   route fails open and `/api/*` goes to the tunnel with no rate limit.
+   History: the Workers Rate Limiting binding used until then did not enforce anything (2026-10-25: 430 requests to
+   `/api` from one IP, all accepted).
 7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
    `container/memory/utilizations`) and compare with the limit. Done 2026-10-25: 4.1 to 4.6 GiB with both models, so
    4 GiB was killed (signal 9) and Eventarc retried; the service now has 8 GiB and 2 vCPU.
-8. **Ingest rate limits (to verify at the first apply)**: the Cloudflare page on the Workers Rate Limiting binding does
-   not say whether it is available on the Workers Free plan; check that the apply accepts the two `ratelimit`
-   bindings of `s1d1-ingest` (namespace ids 1001 and 1002). Then, with `contract/fixtures/valid.ndjson` and no
-   token, send 101 `POST /ingest` in 10 s from one IP: the 101st gets 429 `rate_limited` with `Retry-After: 10`, and
-   the same burst with the community token stays 202. The limits are approximate and per location, so expect a
-   few requests of margin.
-   **Done 2026-10-25: not enforced.** 130 `POST /ingest` from one IP were all accepted (the apply did accept the
-   bindings). Same decision as smoke test 6. Also: Workers Logs invocation logs stay off (pinned in Terraform).
+8. **Ingest rate limits (the same `Limiter`)**: send 110 `POST /ingest` in under 10 s from one IP, with no token and a
+   body whose only line is invalid (`{"v":1}`), so that nothing is written: the first 100 get 202
+   `{"accepted": 0, "dropped": 1}`, the next ones 429 `rate_limited`. The same burst with the community token stays
+   202. The Workers logs must hold no `ingest: limiter` line. Also: Workers Logs invocation logs stay off (pinned in
+   Terraform).
+   History: the two Workers Rate Limiting bindings used until then did not enforce anything (2026-10-25: 130
+   `POST /ingest` from one IP, all accepted).
 
 ## 10. Known corpus cost: script coverage and the drop rule
 

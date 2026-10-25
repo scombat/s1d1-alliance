@@ -96,18 +96,24 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
   alone does not make that work; tantive 0.8.0 and later handle a request path that starts with the prefix (fixed in
   s1d1-tantive PR #5), and smoke test 9.1 of `docs/operations.md` checks `POST /api/v1/systemone` end to end.
 - `CNAME s1d1` to `<tunnel id>.cfargotunnel.com`, proxied.
-- Workers `s1d1-site` (static files of `../site`, Analytics Engine binding `VISITS` on dataset `s1d1_visits`) and
-  `s1d1-ingest`; routes `s1d1.qoo.gy/*` to the first and `s1d1.qoo.gy/ingest` to the second.
+- Workers `s1d1-site` (static files of `../site`, Analytics Engine binding `VISITS` on dataset `s1d1_visits`),
+  `s1d1-ingest` and `s1d1-limiter` (no route); routes `s1d1.qoo.gy/*` to the first and `s1d1.qoo.gy/ingest` to the second.
 - **No zone ruleset.** The zone `qoo.gy` already has its `http_ratelimit` entrypoint ruleset, which holds the rule of
   another subdomain, and the Free plan allows a single rate limiting rule per zone: creating ours failed with
   error 20217. Terraform never manages that ruleset (never declare a `cloudflare_ruleset`, never import the
   entrypoint), so that rule is never touched. `workers/site/test/terraform.test.js` fails if one appears.
-- Three `ratelimit` bindings, per client IP: `API_BURST` on `s1d1-site` (100 per 10 s, namespace 1003, `/api/*`: see
-  `workers/site/README.md`), and `INGEST_BURST` (100 per 10 s, namespace 1001) and `INGEST_SUSTAINED` (100 per 60 s,
-  namespace 1002) on `s1d1-ingest`, community node exempt: see `workers/ingest/README.md`.
-  **Measured 2026-10-25: these bindings did not limit anything** (430 requests to `/api` and 130 to `/ingest` from one
-  IP, all accepted, bindings never logged as missing or failing). They are kept, with no effect for now.
-- Workers Logs are pinned in `workers.tf` (`observability`) on both Workers: logs and persistence on, head sampling 1,
+- **Per-client limits: the `Limiter` Durable Object** of `s1d1-limiter` (`workers/limiter`, SQLite-backed class,
+  counters in memory only), reached by the `LIMITER` binding of `s1d1-site` (`/api/*`: 30 per 10 s and 1 000 per
+  hour, see `workers/site/README.md`) and of `s1d1-ingest` (100 per 10 s and 100 per 60 s, community node exempt, see
+  `workers/ingest/README.md`). A client is named by an HMAC of its IP under `LIMIT_SALT` (`random_password.limit_salt`,
+  a secret of both Workers, never output). The Workers Rate Limiting bindings used before were measured on 2026-10-25
+  not to limit anything (430 requests to `/api` and 130 to `/ingest` from one IP, all accepted) and are gone.
+- **Durable Object migrations.** The provider sends the `migrations` block with every upload of `s1d1-limiter`, not
+  only the first (5.28.1, `workers_script/resource.go`). The tag `v1` creates the class at the first apply; whether
+  Cloudflare accepts `v1` again on a later upload of that script is not verified, so the script is kept tiny and
+  separate (uploading the site or ingest Worker never sends a migration). If such an upload is refused on the
+  migration tag, add `old_tag = "v1"` to the block.
+- Workers Logs are pinned in `workers.tf` (`observability`) on the three Workers: logs and persistence on, head sampling 1,
   traces off, **invocation logs off on purpose** (they store request and client details at Cloudflare, against the
   privacy policy: no IP or headers recorded). Never enable them from the dashboard: the next apply reverts it.
   `workers/ingest/test/terraform.test.js` fails if either Worker stops declaring `invocation_logs = false`.
@@ -336,10 +342,9 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
   zone's DNS (here the tunnel CNAME), see https://developers.cloudflare.com/workers/configuration/routing/routes/.
   This holds for **routes**; a Custom Domain on the same hostname would invoke the Worker again, so never add one.
 - **Rate limit in the Worker, not in the zone.** The Free plan allows one rate limiting rule per zone and `qoo.gy`'s
-  is used by another subdomain, so `/api/*` is limited by the `API_BURST` binding of the site Worker. The Worker's own
-  subrequest to the origin is not counted (the binding counts only the calls the code makes). The count is
-  approximate and per Cloudflare location. Trade-off: when the Workers daily request quota is exhausted the route
-  fails open (manual step 1), `/api/*` goes straight to the tunnel and has no rate limit; the tunnel ingress still
-  allows the API paths only and the deadline shedding of tantive still protects its capacity.
-  In practice the binding was measured as not enforcing anything (2026-10-25, see above); a Durable Object limiter is the
-  planned answer if abuse shows in the analytics.
+  is used by another subdomain, so `/api/*` is limited by the site Worker, which asks the `Limiter` Durable Object
+  once per request (the Worker's own subrequest to the origin is not counted). One Durable Object request per API
+  call: the Free plan's 100 000 a day match the Workers' own daily quota. Trade-off: when the Workers daily request
+  quota is exhausted the route fails open (manual step 1), `/api/*` goes straight to the tunnel and has no rate limit;
+  the tunnel ingress still allows the API paths only and the deadline shedding of tantive still protects its
+  capacity. It costs nothing: the Free plan bills nothing over its quota and the origin is a fixed-price node.

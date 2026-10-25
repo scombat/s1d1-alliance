@@ -1,19 +1,19 @@
 // Ingestion Worker: POST /ingest receives NDJSON batches of classified prompts (contract/ingest-v1.md),
 // validates each line, adds `source` and `received`, and writes the batch as one object to the raw bucket.
 // Nothing here logs a body, a line or a header.
-// Per-IP limits (Workers Rate Limiting bindings INGEST_BURST and INGEST_SUSTAINED) are asked for everyone except the
-// community node, which is recognised by its token first. Measured on 2026-10-25: Cloudflare answers "allowed" every
-// time at our scale, so they do not block in practice (see README.md).
+// Per-client limits (the Limiter Durable Object, ./limit.js and workers/limiter) are asked for everyone except the
+// community node, which is recognised by its token first.
 import { putRaw } from "./gcs.js";
+import { overLimit } from "./limit.js";
 import { isCommunity, sourceOf, validateLine } from "./validate.js";
 
 export const MAX_BYTES = 1_048_576;
 export const MAX_LINES = 500;
 
-/** The two bindings in the order they are asked, with the Retry-After each one gives. */
-const LIMITS = [
-  ["INGEST_BURST", "10"],
-  ["INGEST_SUSTAINED", "60"],
+/** The /ingest limits per client: 100 per 10 s and 100 per 60 s (README.md). */
+export const INGEST_LIMITS = [
+  { name: "10s", limit: 100, period: 10 },
+  { name: "60s", limit: 100, period: 60 },
 ];
 
 const json = (status, body, headers = {}) =>
@@ -48,28 +48,6 @@ async function readBody(request) {
   return new TextDecoder().decode(bytes);
 }
 
-/**
- * Retry-After in seconds when the client is over a limit, or null when it may go on. Both bindings must allow the
- * request; the burst limit is asked first, so a request it refuses does not use up the sustained budget. A binding
- * that is missing (local run, tests) or that throws does not stop the request: the log line names the binding only.
- */
-async function overLimit(env, ip) {
-  for (const [name, retryAfter] of LIMITS) {
-    const binding = env[name];
-    if (typeof binding?.limit !== "function") {
-      console.warn(`ingest: rate limit binding ${name} is missing, not enforced`);
-      continue;
-    }
-    try {
-      const { success } = await binding.limit({ key: ip });
-      if (!success) return retryAfter;
-    } catch {
-      console.warn(`ingest: rate limit binding ${name} failed, not enforced`);
-    }
-  }
-  return null;
-}
-
 function isNdjson(request) {
   const type = (request.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
   return type === "application/x-ndjson";
@@ -86,7 +64,8 @@ export async function handle(request, env, deps = {}) {
 
   if (!isCommunity(request.headers.get("authorization"), env.COMMUNITY_TOKEN)) {
     // The client IP is the only key an attacker cannot forge (an instance_id can be anything).
-    const retryAfter = await overLimit(env, request.headers.get("cf-connecting-ip") || "unknown");
+    const ip = request.headers.get("cf-connecting-ip") || "unknown";
+    const retryAfter = await overLimit(env, "ingest", ip, INGEST_LIMITS);
     if (retryAfter !== null) return json(429, { error: "rate_limited" }, { "retry-after": retryAfter });
   }
 

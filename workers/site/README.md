@@ -45,40 +45,42 @@ never cached. An unreachable origin, or an origin body that fails while it is re
 | `CACHE_TTL` | variable | seconds, `86400` by default (Terraform refuses 0 or less) |
 | `DEBUG_CACHE_HEADER` | variable | `"1"` adds `x-s1d1-cache: HIT` or `MISS`; anything else (Terraform's default `"0"`) leaves it out |
 | `ORIGIN_REQUIRES_AUTH` | variable | `"1"` turns the cache off entirely (no match, no put); Terraform's default is `"0"` |
-| `API_BURST` | rate limit binding | Workers Rate Limiting, 100 per 10 s per client IP, namespace `1003`. Optional: if it is missing, or throws, the request goes on (fail open) |
+| `LIMITER` | Durable Object binding | class `Limiter` of the `s1d1-limiter` Worker (`workers/limiter`). Optional: if it is missing, or throws, the request goes on (fail open) |
+| `LIMIT_SALT` | secret | key of the HMAC that names a client in the limiter (`random_password.limit_salt`) |
 | `MAINTENANCE` | variable | `"1"` to answer 503 on `/api/*` |
 | `STATUS_COMMIT`, `STATUS_TANTIVE_IMAGE`, `STATUS_MODEL` | variables | what `/status.json` reports |
 
 Routes: `s1d1.qoo.gy/*` for this Worker, with `s1d1.qoo.gy/ingest` for the ingest Worker (the more specific route
-wins). No secret is needed here.
+wins). The only secret is `LIMIT_SALT`.
 
 ## Rate limit
 
-`/api/*` is limited per client IP (`cf-connecting-ip`, `unknown` when absent) by the `API_BURST`
-[Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) binding:
-100 requests per 10 s (as configured; see "Measured" below, it was not enforced when tested). The landing, `/status.json` and the static assets are never limited.
+`/api/*` is limited per client: **30 requests per 10 s and 1 000 per hour** (docs/31 of the project). The landing,
+`/status.json` and the static assets are never limited.
 
+- **How.** `src/limit.js` (the same file as `workers/ingest/src/limit.js`) asks the `Limiter` Durable Object of the
+  `s1d1-limiter` Worker (`workers/limiter`). There is one instance per client, so the count is exact whichever
+  Cloudflare location the request comes through. The Workers Rate Limiting bindings used before were approximate and
+  per location, and were measured on 2026-10-25 not to block anything (430 requests from one IP, all accepted).
+- **The client** is named `api:<HMAC-SHA-256 of cf-connecting-ip under LIMIT_SALT>` (`unknown` when the header is
+  absent). The IP never leaves this Worker and is never logged; the limiter keeps its counters in memory only.
 - The check comes after maintenance and the allow-list (an unknown path is still a 404, a wrong method a 405, and
   neither uses budget) and before the body is read and the cache is consulted. A cache HIT counts like any other
   request: the limit protects the edge as well as the origin.
-- Over the limit: 429 `{"error": "rate_limited"}` with `Retry-After: 10`; the origin is not called and the cache is
-  not consulted.
-- A missing or throwing binding fails open, with one log line that names the binding and holds no request data.
-- The count is approximate and per Cloudflare location (the binding is eventually consistent), like the ingest limits.
-- **Measured 2026-10-25: not enforced.** 430 requests to `/api` from one IP (110 in under 1 s, 320 over 8 s) were all
-  accepted. The Workers logs show the `API_BURST` binding was called and never reported missing or failing, so it
-  answered "allowed" every time. Cloudflare documents these limits as approximate and per location. Decision: the
-  binding stays in the code (no effect for now) and no other edge limit is added during the first period; the deadline
-  shedding of tantive protects its capacity. If abuse shows in the analytics, a Durable Object limiter will be built.
+- Over the limit: 429 `{"error": "rate_limited"}` with `Retry-After` = the seconds until the full window ends; the
+  origin is not called and the cache is not consulted. A refused request is not counted.
+- A missing binding or salt, or a limiter that throws, fails open with one log line, `api: limiter is missing, not
+  enforced` or `api: limiter failed, not enforced`, which holds no request data. Failing open costs nothing: the origin
+  is a fixed-price node, and the Workers Free plan bills nothing over its quota.
 - **There is no zone rule.** The zone `qoo.gy` allows a single rate limiting rule on the Free plan and it is already
   used by another subdomain; Terraform must never manage that zone ruleset (`terraform/cloudflare.tf`).
 - **Known trade-off.** When the Workers daily request quota is exhausted, the route fails open (section "Manual steps"
   of `terraform/README.md`): `/api/*` then goes straight to the tunnel, with no allow-list in the Worker and no rate
   limit. The tunnel ingress still lists the API paths only, and the deadline shedding of tantive still protects
-  its capacity.
-- Terraform: `{ name = "API_BURST", type = "ratelimit", namespace_id = "1003", simple = { limit = 100, period = 10 } }`
-  on the Worker's `bindings`; `test/terraform.test.js` checks it stays declared and that no `cloudflare_ruleset`
-  exists.
+  its capacity. It costs nothing either.
+- Terraform: the `LIMITER` and `LIMIT_SALT` bindings of the Worker and the `s1d1-limiter` script (`workers.tf`);
+  `test/terraform.test.js` checks they stay declared, that no `ratelimit` binding comes back and that no
+  `cloudflare_ruleset` exists.
 
 ## Why the cache key is the exact body
 

@@ -24,7 +24,7 @@ personal data reach the clean corpus (`anonymizer/`), the Terraform and its IAM 
 
 Out of scope:
 
-- Rate limits: the Workers rate limits are measured as not enforced at our scale (docs/operations.md, section 9, smoke tests 6 and 8); reports that only restate this are known.
+- Rate limits: they fail open when the limiter Worker is unreachable, and the route fails open when the Workers daily quota is exhausted (terraform/README.md); both are known and accepted.
 - Volumetric denial of service.
 - The platforms themselves (Cloudflare, Google Cloud, Hetzner Cloud): report those to their vendors.
 - The behaviour of the routing model. That belongs to the model card on the Hugging Face Hub.
