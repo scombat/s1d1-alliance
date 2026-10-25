@@ -82,7 +82,10 @@ bindings). So the first apply is a plain run, and a second one, with the image s
    anonymizer's bucket and secret bindings, the Eventarc receiver role and the trigger. The Cloud Storage service
    agent's publisher role is created by the first apply so that it has propagated by then; if the trigger is still
    refused with a permission error on the service agent (it can take a few minutes the first time), start the run
-   again: the second try succeeds once the role has propagated. Every later image goes the same way: merge to `main`,
+   again: the second try succeeds once the role has propagated. Terraform also grants the Eventarc and Pub/Sub service
+   agents their roles (`roles/eventarc.serviceAgent` on the project, `roles/iam.serviceAccountTokenCreator` on `eventarc-invoker` only); if an agent does not
+   exist yet, `gcloud beta services identity create --service=eventarc.googleapis.com` (or `pubsub.googleapis.com`)
+   creates it. Every later image goes the same way: merge to `main`,
    read the summary, open a PR with the new digest, apply.
 6. The tunnel exists with no connector: start the nodes (section 5). Fill `status_commit`, `tantive_image` and
    `status_model` for `/status.json` when the node digests are known.

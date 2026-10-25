@@ -147,6 +147,13 @@ ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anon
   - `anonymizer`: `roles/storage.objectViewer` on the raw bucket only, `roles/secretmanager.secretAccessor` on the
     two R2 secrets only; it is the identity of the Cloud Run service.
   - `eventarc-invoker`: `roles/run.invoker` on the service only, `roles/eventarc.eventReceiver` on the project.
+  - Terraform also grants two Google-managed service agents on the project: `roles/eventarc.serviceAgent` to the
+    Eventarc agent (`service-<project number>@gcp-sa-eventarc.iam.gserviceaccount.com`) and
+    `roles/iam.serviceAccountTokenCreator` to the Pub/Sub agent (`service-<project number>@gcp-sa-pubsub.iam.gserviceaccount.com`,
+    for the OIDC push to Cloud Run), **on the `eventarc-invoker` service account only**, never project-wide (a
+    project-level token creator could impersonate every account of the project). Terraform grants both; they were made
+    by hand at the first deployment, the token creator then at project level: remove that one (`gcloud projects
+    remove-iam-policy-binding … --role=roles/iam.serviceAccountTokenCreator`) once Terraform has applied the scoped one.
   - `ci-publisher`: `roles/artifactregistry.writer` on the `s1d1` repository only (see below).
 - **Secrets** `r2-access-key-id`, `r2-secret-access-key` in Secret Manager, replicated in `europe-west1` only. The
   service reads the pinned version, so a rotation (new R2 token) makes a new revision.
@@ -173,6 +180,13 @@ ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anon
   `assertion.repository == "<github_repository>" && assertion.ref == "refs/heads/main"`, plus the numeric owner id when
   `github_repository_owner_id` is set (GitHub advises it: a name can be released and re-registered by someone else).
   `ci-publisher` can be impersonated by `principalSet .../attribute.repository/<github_repository>` only.
+
+### Troubleshooting: a service agent does not exist
+
+If the apply fails on the two service-agent grants above because the agent does not exist yet, create it with
+`gcloud beta services identity create --service=eventarc.googleapis.com --project=<project>` (or
+`--service=pubsub.googleapis.com`) and run again. (The provider's `google_project_service_identity` is beta-only; the
+google-beta provider is not used.)
 
 ### Ingress `INTERNAL_ONLY` and Eventarc
 
