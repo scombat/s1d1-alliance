@@ -1,5 +1,6 @@
-# A 5 EUR monthly budget on this project. It alerts, it never stops anything: the real brakes are Cloud Run's
-# 2 instances at most, the 3-day lifecycle of the raw bucket and the rate limit in front of everything.
+# A 5 EUR monthly budget on this project. It alerts, it never stops anything: the cost is bounded by the anonymizer
+# job itself (one run every 2 days, at most anonymizer_max_prompts lines and one hour each, gcp.tf), not by the
+# traffic. docs/31 of the project.
 #
 # No all_updates_rule: with only threshold rules, Cloud Billing emails the billing account administrators and users
 # at each threshold (the default recipients), which is the wanted channel.

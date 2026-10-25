@@ -46,7 +46,7 @@ Done once, outside Terraform:
 | `gcp_project` | no | also names the raw bucket `<project>-s1d1-raw` |
 | `billing_account` | no | |
 | `budget_currency` | no | must equal the billing account currency (default `EUR`) |
-| `terraform_service_account` | no | email of the account HCP runs as, same as `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`; gets `iam.serviceAccountUser` on `anonymizer` and `eventarc-invoker` only |
+| `terraform_service_account` | no | email of the account HCP runs as, same as `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`; gets `iam.serviceAccountUser` on `anonymizer` and `anonymizer-scheduler` only |
 | `anonymizer_image` | no | not set by hand: it comes from `terraform/images.auto.tfvars` (section 3); absent (null) on the first apply |
 | `hcloud_token` | **yes** | Read & Write API token of the Hetzner Cloud project |
 | `TFC_GCP_PROVIDER_AUTH`, `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`, `TFC_GCP_WORKLOAD_PROVIDER_NAME` | no | environment variables of the dynamic provider credentials (recommended) |
@@ -58,10 +58,9 @@ Optional, with defaults: `deploy_version`, `status_commit`, `status_model`, `mai
 
 ## 3. First apply, in this order
 
-The Cloud Run service needs an image that already exists, and the image needs the registry and the federation. The
+The Cloud Run Job needs an image that already exists, and the image needs the registry and the federation. The
 workspace is VCS-driven, so there is no `-target`: `anonymizer_image` is null by default, and with it null Terraform
-creates everything except the anonymizer (no Cloud Run service, no Eventarc trigger, none of the anonymizer's IAM
-bindings). So the first apply is a plain run, and a second one, with the image set, adds the anonymizer.
+creates everything except the anonymizer (no Cloud Run Job, no schedule, none of the anonymizer's IAM bindings). So the first apply is a plain run, and a second one, with the image set, adds the anonymizer.
 
 1. **First apply, without the anonymizer**: start a run of the workspace (or merge to `main`) with no
    `terraform/images.auto.tfvars`. It creates the APIs, Artifact Registry, the federation and `ci-publisher`, the raw
@@ -79,14 +78,10 @@ bindings). So the first apply is a plain run, and a second one, with the image s
 4. **Set the digest**: in a pull request, create `terraform/images.auto.tfvars` with that line:
    `anonymizer_image = "<region>-docker.pkg.dev/<project>/s1d1/anonymizer@sha256:<64 hex>"`.
    (`*.auto.tfvars` is the one tfvars form git keeps.) A tag without a digest is refused by the variable.
-5. **Second apply**: merging the pull request starts it. It adds the Cloud Run service, its invoker binding, the
-   anonymizer's bucket and secret bindings, the Eventarc receiver role and the trigger. The Cloud Storage service
-   agent's publisher role is created by the first apply so that it has propagated by then; if the trigger is still
-   refused with a permission error on the service agent (it can take a few minutes the first time), start the run
-   again: the second try succeeds once the role has propagated. Terraform also grants the Eventarc and Pub/Sub service
-   agents their roles (`roles/eventarc.serviceAgent` on the project, `roles/iam.serviceAccountTokenCreator` on `eventarc-invoker` only); if an agent does not
-   exist yet, `gcloud beta services identity create --service=eventarc.googleapis.com` (or `pubsub.googleapis.com`)
-   creates it. Every later image goes the same way: merge to `main`,
+5. **Second apply**: merging the pull request starts it. It adds the Cloud Run Job, its invoker binding for
+   `anonymizer-scheduler`, the Cloud Scheduler job and the anonymizer's bucket and secret bindings. If the Cloud
+   Scheduler job is refused because Terraform may not act as `anonymizer-scheduler` yet (the grant can take a minute to
+   propagate the first time), start the run again. creates it. Every later image goes the same way: merge to `main`,
    read the summary, open a PR with the new digest, apply.
 6. The tunnel exists with no connector: start the nodes (section 5). Fill `status_commit` and `status_model` for
    `/status.json` when known; its Tantive image now comes from `node/desired.env` (delete the old `tantive_image`
@@ -165,9 +160,11 @@ gcloud storage ls -l -r "gs://<project>-s1d1-raw/raw/" \
       '$3 ~ /^gs:/ && $2 < limit { print "TOO OLD:", $2, $3; bad=1 } END { exit bad }'
 ```
 
-Exit status 0 and no output: fine. Otherwise look at the Eventarc trigger and Cloud Run errors first. (`gcloud storage ls -l` prints size, creation time and URL; run it once by hand
+Exit status 0 and no output: fine. Otherwise look at the bucket's lifecycle rule first: the anonymizer job never
+deletes anything, the rule does. (`gcloud storage ls -l` prints size, creation time and URL; run it once by hand
 to confirm the format of your `gcloud` version.) Also glance at the
-clean side: an object `clean/YYYY/MM/DD/<uuid>.ndjson` must exist for each recent raw one.
+clean side after each run of the job: new `clean/YYYY/MM/DD/<uuid>.ndjson` objects, one for each raw object it drew a
+line from (not one per raw object any more: the job draws at most `anonymizer_max_prompts` lines, section 12).
 
 ## 8. Reading `/metrics` (decision 49)
 
@@ -200,9 +197,9 @@ These were verified against documentation only; the first deploy is where they a
    test object appears in `s1d1-clean`.
 4. **GCS PUT from the ingest Worker**: `POST /ingest` with the fixtures of `contract/fixtures/` gives 202, and a
    `raw/YYYY/MM/DD/<uuid>.ndjson` object appears.
-5. **Eventarc reaches the `INTERNAL_ONLY` Cloud Run service**: that object produces a clean one within a minute or two. If
-   Cloud Run logs show 403/404 deliveries, see "Ingress INTERNAL_ONLY and Eventarc" in `terraform/README.md` for the
-   fallback.
+5. **The anonymizer job runs and writes**: run it by hand (section 12); its last log line, `batch done`, gives the
+   counts, and the raw object of test 4 produces a clean one. Then check that Cloud Scheduler shows the next run of
+   `s1d1-anonymizer-every-2-days`.
 6. **`/api` rate limit (the `Limiter` Durable Object, docs/31 of the project)**: check that the apply creates the
    `s1d1-limiter` Worker with its `Limiter` class and accepts the `LIMITER` binding of `s1d1-site`. Then send 40
    `GET /api/v1/models` in under 10 s from one IP: the first 30 get 200, the next ones 429 `rate_limited` with a
@@ -216,8 +213,9 @@ These were verified against documentation only; the first deploy is where they a
    History: the Workers Rate Limiting binding used until then did not enforce anything (2026-10-25: 430 requests to
    `/api` from one IP, all accepted).
 7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
-   `container/memory/utilizations`) and compare with the limit. Done 2026-10-25: 4.1 to 4.6 GiB with both models, so
-   4 GiB was killed (signal 9) and Eventarc retried; the service now has 8 GiB and 2 vCPU.
+   `container/memory/utilizations`) and compare with the limit. Done 2026-10-25 on the former Cloud Run service: 4.1 to
+   4.6 GiB with both models, so 4 GiB was killed (signal 9); the job has 8 GiB and 2 vCPU. Read it again on the
+   first run of the job, which holds up to `anonymizer_max_prompts` lines at once.
 8. **Ingest rate limits (the same `Limiter`)**: send 110 `POST /ingest` in under 10 s from one IP, with no token and a
    body whose only line is invalid (`{"v":1}`), so that nothing is written: the first 100 get 202
    `{"accepted": 0, "dropped": 1}`, the next ones 429 `rate_limited`. The same burst with the community token stays
@@ -242,12 +240,39 @@ Open points of the live instance (it has been running since 2026-10-25):
 
 - **Route failure mode**: only the dashboard can set it; the values of section 4 must be checked after each
   apply.
-- **Live behaviours not provable offline**: the eight smoke tests of section 9 (same-zone fetch, `INTERNAL_ONLY`
-  Eventarc, R2 EU write, GCS PUT, `/api` rate limit, peak memory, ingest rate limits).
-- **Eventarc retries**: the policy cannot be tuned in this provider version (`max_attempts = 1` only, no dead letter);
-  a permanently failing object can be redelivered for 24 h. Watch Cloud Run's error rate.
+- **Live behaviours not provable offline**: the eight smoke tests of section 9 (same-zone fetch, R2 EU write, GCS
+  PUT, the anonymizer job, `/api` rate limit, peak memory, ingest rate limits).
+- **`anonymizer_max_prompts`**: 5 000 by default, to set from the time per prompt read at the first run (section 12).
 - **Legal texts**: the three French pages of the site (terms, privacy, legal notice) are written and were reviewed by the
   maintainer's lawyer. An English courtesy translation of the terms, with the French text prevailing, is not done.
 - **Pinned images**: `node/desired.env` and `node/example.env` carry the real tantive 0.8.1 digest; a new release goes
   through a pull request on `node/desired.env`.
 - **Cache lifetime**: `CACHE_TTL` is 86 400 s by choice; revisit with real traffic.
+
+## 12. The anonymizer job (docs/31 of the project)
+
+Since 2026-10-25 the anonymizer is a Cloud Run Job, `s1d1-anonymizer-job`, started by Cloud Scheduler every 2 days
+(`0 3 */2 * *` UTC), instead of a service called by Eventarc on each raw object. Each run lists the raw objects, leaves
+out those already cleaned (their clean object exists in R2), draws at most `anonymizer_max_prompts` lines uniformly at
+random, cleans them and writes the clean objects. It stops cleaning at 55 minutes and writes what it kept; the job's
+timeout is one hour. So the cost is bounded per run, whatever the traffic. The lines not drawn are never stored: the
+lifecycle rule deletes their raw objects at 3 days, as before. Details: `anonymizer/README.md`.
+
+**Run it by hand** (to clean now, or after a failed run):
+
+```bash
+gcloud run jobs execute s1d1-anonymizer-job --region europe-west1 --project <project> --wait
+```
+
+A run started by hand counts like a scheduled one: it leaves out what is already cleaned, so running it twice cleans
+nothing twice.
+
+**Read a run**: Cloud Run, Jobs, `s1d1-anonymizer-job`, the execution, Logs. The last line is `batch done` with
+`objects`, `already_clean`, `lines`, `drawn`, `cleaned`, `kept`, `dropped`, `dropped_uncovered_script`, `failed`,
+`written`, `deadline_reached` and `seconds`. No line ever holds a prompt or an object name. `deadline_reached: true`
+means the run stopped at 55 minutes: lower `anonymizer_max_prompts`. `seconds / cleaned` is the time per prompt that
+sets it (at most about 3 000 seconds of cleaning per run).
+
+**A failed run** (exit status 1, `batch failed` with an error class) waits for the next one, at most 2 days later:
+the raw objects it did not clean are still there (they live 3 days). Two failed runs in a row lose the oldest ones.
+

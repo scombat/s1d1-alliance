@@ -25,9 +25,9 @@ Nothing runs there that is not in this repository, and nothing in this repositor
                                    │ miss                          │
                                    ▼                               ▼
                            Cloudflare Tunnel              GCS "raw" (EU, 3 days)
-                         ┌─────────┴─────────┐                     │ object created
-                         ▼                   ▼                     ▼ Eventarc
-                  Hetzner: tantive     homelab: tantive    Cloud Run: GLiNER + regex
+                         ┌─────────┴─────────┐                     │
+                         ▼                   ▼                     ▼ every 2 days, X at random
+                  Hetzner: tantive     homelab: tantive    Cloud Run Job: GLiNER + regex
                          └──── captures ─────┘                     │
                                sent to /ingest                     ▼
                                                           R2 "clean" (EU, kept)
@@ -40,8 +40,9 @@ Nothing runs there that is not in this repository, and nothing in this repositor
   hour per client, by the `site` Worker itself: a Durable Object counter (`workers/limiter`), not a zone rule. The
   client is named by an HMAC of its IP, which is never stored.
 - Only the paths of the API leave the Cloudflare Tunnel; the nodes publish no port.
-- A prompt lands in the raw bucket, and the object creation triggers the anonymiser (Eventarc, then Cloud Run) at once,
-  which writes the clean copy to the clean bucket. The raw copy is deleted after 3 days (4 at most, the deletion is
+- A prompt lands in the raw bucket. Every 2 days a Cloud Run Job draws a bounded number of the waiting prompts at
+  random, anonymises them and writes the clean copies to the clean bucket; the others are never stored. The cost is
+  bounded per run, whatever the traffic. The raw copy is deleted after 3 days (4 at most, the deletion is
   asynchronous). The clean copy keeps no instance identifier, no IP address and no headers. The contract is in `contract/ingest-v1.md`.
 - Each node pulls its own images by digest and checks their cosign signature before it starts them.
 

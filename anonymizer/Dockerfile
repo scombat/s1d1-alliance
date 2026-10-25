@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# The anonymizer: a Cloud Run service (linux/amd64) with both GLiNER models baked in at their pinned commits.
+# The anonymizer: a Cloud Run Job (linux/amd64) with both GLiNER models baked in at their pinned commits.
 # Build:  docker build --platform linux/amd64 -t s1d1-anonymizer:dev anonymizer/
 # python:3.12-slim, index digest of 2026-10-24.
 ARG BASE=python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
@@ -30,8 +30,8 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
-    GLINER_MODEL_DIRS=/model/knowledgator,/model/urchade \
-    PORT=8080
+    GLINER_MODEL_DIRS=/model/knowledgator,/model/urchade
 USER anonymizer
-EXPOSE 8080
-CMD ["sh", "-c", "exec uvicorn anonymizer.app:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# The batch job (terraform/gcp.tf sets the same command). The Eventarc handler, anonymizer.app, stays in the image
+# for a return to one run per object: `uvicorn anonymizer.app:app --host 0.0.0.0 --port 8080`.
+CMD ["python", "-m", "anonymizer.batch"]
