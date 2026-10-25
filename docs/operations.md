@@ -46,12 +46,13 @@ Done once, outside Terraform:
 | `gcp_project` | no | also names the raw bucket `<project>-s1d1-raw` |
 | `billing_account` | no | |
 | `budget_currency` | no | must equal the billing account currency (default `EUR`) |
+| `terraform_service_account` | no | email of the account HCP runs as, same as `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`; gets `iam.serviceAccountUser` on `anonymizer` and `eventarc-invoker` only |
 | `anonymizer_image` | no | not set by hand: it comes from `terraform/images.auto.tfvars` (section 3); absent (null) on the first apply |
 | `hcloud_token` | **yes** | Read & Write API token of the Hetzner Cloud project |
 | `TFC_GCP_PROVIDER_AUTH`, `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`, `TFC_GCP_WORKLOAD_PROVIDER_NAME` | no | environment variables of the dynamic provider credentials (recommended) |
 | `GOOGLE_CREDENTIALS` | **yes** | environment variable, only if not using dynamic credentials |
 
-Optional, with defaults: `deploy_version`, `status_commit`, `tantive_image`, `status_model`, `maintenance`, `cache_ttl`,
+Optional, with defaults: `deploy_version`, `status_commit`, `status_model`, `maintenance`, `cache_ttl`,
 `debug_cache_header`, `origin_requires_auth`, `gcp_region`, `budget_amount`, `github_repository`, `github_repository_owner_id` (set it: the numeric owner id),
 `hcloud_location`, `hcloud_server_type`.
 
@@ -87,8 +88,13 @@ bindings). So the first apply is a plain run, and a second one, with the image s
    exist yet, `gcloud beta services identity create --service=eventarc.googleapis.com` (or `pubsub.googleapis.com`)
    creates it. Every later image goes the same way: merge to `main`,
    read the summary, open a PR with the new digest, apply.
-6. The tunnel exists with no connector: start the nodes (section 5). Fill `status_commit`, `tantive_image` and
-   `status_model` for `/status.json` when the node digests are known.
+6. The tunnel exists with no connector: start the nodes (section 5). Fill `status_commit` and `status_model` for
+   `/status.json` when known; its Tantive image now comes from `node/desired.env` (delete the old `tantive_image`
+   workspace variable in HCP after merge: an undeclared variable only warns, but keep things clean).
+7. After the first apply that contains the `terraform_acts_as_*` grants, remove the project-level
+   `iam.serviceAccountUser` of the HCP account (bootstrap, `terraform/README.md` "Manual steps" item 3), by hand and
+   only after that apply succeeded:
+   `gcloud projects remove-iam-policy-binding <project> --member="serviceAccount:<hcp sa>" --role="roles/iam.serviceAccountUser" --condition=None`
 
 Artifact Registry has no cleanup policy: an age rule would one day delete the image Cloud Run runs. Delete old images
 by hand when the storage cost matters, never the digest in `terraform/images.auto.tfvars`.

@@ -48,3 +48,17 @@ test("no cloudflare_ruleset resource exists in terraform/*.tf (the zone's free r
     assert.doesNotMatch(code, /http_ratelimit/, `${file} mentions the http_ratelimit phase`);
   }
 });
+
+// /status.json must show what the nodes are pinned to: STATUS_TANTIVE_IMAGE comes from node/desired.env, not a variable.
+const desiredEnvPath = join(here, "../../../node/desired.env");
+test("terraform takes STATUS_TANTIVE_IMAGE from the TANTIVE_IMAGE line of node/desired.env", () => {
+  assert.match(workersTf, /tantive_image\s*=\s*regex\("\(\?m\)\^TANTIVE_IMAGE=\(\\\\S\+\)\$", file\("\$\{path\.module\}\/\.\.\/node\/desired\.env"\)\)\[0\]/);
+  assert.match(workersTf, /name = "STATUS_TANTIVE_IMAGE", type = "plain_text", text = local\.tantive_image /);
+  assert.doesNotMatch(readFileSync(join(tfDir, "variables.tf"), "utf8"), /variable "tantive_image"/);
+});
+
+test("node/desired.env pins TANTIVE_IMAGE by digest", () => {
+  const lines = readFileSync(desiredEnvPath, "utf8").split("\n").filter((l) => l.startsWith("TANTIVE_IMAGE="));
+  assert.equal(lines.length, 1, "exactly one TANTIVE_IMAGE line");
+  assert.match(lines[0].slice("TANTIVE_IMAGE=".length), /^ghcr\.io\/scombat\/s1d1-tantive:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$/);
+});

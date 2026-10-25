@@ -85,6 +85,21 @@ resource "google_service_account" "eventarc_invoker" {
   depends_on = [google_project_service.api]
 }
 
+# The account HCP runs as acts (iam.serviceAccounts.actAs) only as the runtime accounts Terraform attaches to a resource:
+# anonymizer (Cloud Run identity) and eventarc-invoker (Eventarc trigger identity). ingest-writer is only the owner of
+# an HMAC key and is attached to nothing. The HCP account itself is bootstrapped by hand (README.md, "Manual steps").
+resource "google_service_account_iam_member" "terraform_acts_as_anonymizer" {
+  service_account_id = google_service_account.anonymizer.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.terraform_service_account}"
+}
+
+resource "google_service_account_iam_member" "terraform_acts_as_eventarc_invoker" {
+  service_account_id = google_service_account.eventarc_invoker.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.terraform_service_account}"
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Raw bucket: a buffer, not an archive. Objects are deleted at 3 days; nobody reads them but the anonymizer.
 # ---------------------------------------------------------------------------------------------------------------------
@@ -296,6 +311,7 @@ resource "google_cloud_run_v2_service" "anonymizer" {
 
   depends_on = [
     google_project_service.api,
+    google_service_account_iam_member.terraform_acts_as_anonymizer,
     google_secret_manager_secret_iam_member.anonymizer_r2_access_key_id,
     google_secret_manager_secret_iam_member.anonymizer_r2_secret_access_key,
     google_storage_bucket_iam_member.anonymizer_reads,
@@ -393,6 +409,7 @@ resource "google_eventarc_trigger" "raw_finalized" {
     google_project_iam_member.eventarc_invoker_receives,
     google_project_iam_member.eventarc_agent,
     google_service_account_iam_member.pubsub_agent_token_creator,
+    google_service_account_iam_member.terraform_acts_as_eventarc_invoker,
     google_cloud_run_v2_service_iam_member.eventarc_invokes,
   ]
 }
