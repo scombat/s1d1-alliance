@@ -22,7 +22,7 @@ LiteLLM 1.106+: System One. Set classifier_type "oss_classifier" and opensource_
 Example:
 curl -s https://s1d1.qoo.gy/api/v1/systemone -H 'content-type: application/json' -d '{"state": "Write a Terraform module", "questions": {"tier": {"type": "choice", "criteria": {"SIMPLE": "", "MEDIUM": "", "COMPLEX": "", "REASONING": ""}}}}'
 
-Rate limit: about 100 requests per 10 s per IP (approximate, counted per Cloudflare location). On a 429 (or a 503 during maintenance), retry later or fall back to your default model.
+Rate limit: 30 requests per 10 s and 1000 per hour per client IP. On a 429 (or a 503 during maintenance), retry later or fall back to your default model.
 
 ## Alternatives
 

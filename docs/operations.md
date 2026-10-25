@@ -211,6 +211,8 @@ These were verified against documentation only; the first deploy is where they a
    `api: limiter failed` line. The zone has no rate limit rule of ours: do not look for one in the dashboard (the
    single rule there is the other subdomain's). Known trade-off: when the Workers daily request quota is exhausted the
    route fails open and `/api/*` goes to the tunnel with no rate limit.
+   Done 2026-10-25 after the apply of PR #19: 40 `GET /api/v1/models`, 30 × 200 then 10 × 429 `rate_limited`
+   (`Retry-After: 5`), `/` and `/status.json` 200, 200 again after the window.
    History: the Workers Rate Limiting binding used until then did not enforce anything (2026-10-25: 430 requests to
    `/api` from one IP, all accepted).
 7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
@@ -221,6 +223,8 @@ These were verified against documentation only; the first deploy is where they a
    `{"accepted": 0, "dropped": 1}`, the next ones 429 `rate_limited`. The same burst with the community token stays
    202. The Workers logs must hold no `ingest: limiter` line. Also: Workers Logs invocation logs stay off (pinned in
    Terraform).
+   Done 2026-10-25 after the apply of PR #19, without the token: 110 `POST /ingest`, 100 × 202 then 10 × 429, and
+   `{"accepted":0,"dropped":1}` again after 60 s. Not run with the community token.
    History: the two Workers Rate Limiting bindings used until then did not enforce anything (2026-10-25: 130
    `POST /ingest` from one IP, all accepted).
 
