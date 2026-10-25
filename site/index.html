@@ -110,8 +110,8 @@ wire_api = "responses"</pre>
     baseUrl: http://localhost:4000/v1
     apiKey: LITELLM_API_KEY
     api: openai-completions
-    models:
-      - id: s1d1-auto</pre>
+    discovery:
+      type: openai-models-list  <span class="c"># finds s1d1-auto in LiteLLM's /v1/models</span></pre>
 <div class="step">3 · Run</div>
 <pre>omp --model litellm/s1d1-auto</pre>
 </div>
