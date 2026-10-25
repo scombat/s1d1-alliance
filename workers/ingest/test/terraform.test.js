@@ -54,3 +54,23 @@ for (const name of ["site", "ingest"]) {
     assert.doesNotMatch(body, /invocation_logs\s*=\s*true/, `${name}: invocation_logs must never be true`);
   });
 }
+
+// Refresh copies every non-null observability value the settings API returns into the state (provider 5.28.1). A
+// value the API fills in by itself but the block leaves unset (logs and traces `destinations`, the traces' sampling
+// rate) makes each plan show both Workers as changed in place. terraform/README.md, Workers Logs.
+for (const name of ["site", "ingest"]) {
+  test(`terraform writes out the observability values the API returns on the ${name} Worker`, () => {
+    const start = workersTf.indexOf(`resource "cloudflare_workers_script" "${name}"`);
+    assert.notEqual(start, -1, `${name} Worker resource not found`);
+    const rest = workersTf.slice(start + 1);
+    const next = rest.search(/^resource /m);
+    const body = next === -1 ? rest : rest.slice(0, next);
+    for (const block of ["logs", "traces"]) {
+      const m = body.match(new RegExp(`^\\s*${block} = \\{\\n([^}]*)\\}`, "m"));
+      assert.ok(m, `${name}: observability.${block} block not found`);
+      assert.match(m[1], /^\s*destinations\s*=\s*\[\]\s*$/m, `${name}: ${block}.destinations must be []`);
+      assert.match(m[1], /^\s*head_sampling_rate\s*=\s*1\s*$/m, `${name}: ${block}.head_sampling_rate must be 1`);
+      assert.match(m[1], /^\s*persist\s*=\s*true\s*$/m, `${name}: ${block}.persist must be true`);
+    }
+  });
+}

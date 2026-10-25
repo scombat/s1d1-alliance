@@ -111,6 +111,9 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
   traces off, **invocation logs off on purpose** (they store request and client details at Cloudflare, against the
   privacy policy: no IP or headers recorded). Never enable them from the dashboard: the next apply reverts it.
   `workers/ingest/test/terraform.test.js` fails if either Worker stops declaring `invocation_logs = false`.
+  The block also writes out the values the API fills in by itself (`destinations = []` for logs and traces, traces
+  head sampling 1 and persistence): the provider copies them into the state on refresh, so a value left unset shows
+  as an in-place update of the Worker in every plan. The same test fails if one of them is removed.
 - R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it, with the one permission group
   `Workers R2 Storage Bucket Item Write`: the anonymizer only writes (`PutObject`), so `Item Read` is not granted. R2
   has no write-only object permission: `Item Write` is the dashboard's "Object Read & Write" and also allows reading
