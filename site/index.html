@@ -170,7 +170,7 @@ client.chat.completions.create(model=MODELS[tier], messages=[...])</pre>
 
 </div>
 </div>
-<p class="note">Limit: about 100 requests per 10 s per IP (approximate, counted per Cloudflare location). On a 429 or a 503, fall back to your default model.</p>
+<p class="note">Limit: 30 requests per 10 s and 1 000 per hour per IP. On a 429 or a 503, fall back to your default model.</p>
 
 <h3>Try it here</h3>
 <form id="try-box">

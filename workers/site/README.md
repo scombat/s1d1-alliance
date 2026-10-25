@@ -17,7 +17,7 @@ No build step and no npm dependency: ES modules, tested on Node 22.
 | `GET /api/v1/models`, `/api/models` | relayed, not cached |
 | a listed path with the wrong method | 405 with `Allow` |
 | any other `/api/*` (`/api/metrics`, `/api/info`, `/api/health`, `/api/v1/systemone/x`, trailing slash, ...) | 404, the origin is not called |
-| a listed path, client IP over 100 requests per 10 s | 429 `{"error": "rate_limited"}`, `Retry-After: 10`; the body is not read, the cache and the origin are not touched |
+| a listed path, client IP over 30 requests per 10 s or 1 000 per hour | 429 `{"error": "rate_limited"}`, `Retry-After` the seconds left in the full window; the body is not read, the cache and the origin are not touched |
 | a `POST` body over 1 MiB (1 048 576 bytes) | 413, the origin is not called |
 | anything else (`/llms.txt`, legal pages, ...) | `ASSETS` |
 

@@ -58,7 +58,7 @@ test("llms.txt starts with the terms, then what s1d1-alliance is, then the API",
   assert.ok(terms >= 0 && what > terms && api > what, `${terms} ${what} ${api}`);
   assert.ok(terms < 600, "terms come first");
   assert.match(txt, /tell your human/i);
-  assert.match(txt, /100 requests per 10 s/);
+  assert.match(txt, /30 requests per 10 s and 1000 per hour/);
   assert.match(txt, /429/);
   assert.ok(txt.includes("https://github.com/scombat/s1d1-tantive/blob/main/llms.txt"));
 });
