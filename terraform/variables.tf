@@ -26,12 +26,6 @@ variable "status_commit" {
   description = "Commit reported by /status.json (STATUS_COMMIT)."
 }
 
-variable "tantive_image" {
-  type        = string
-  default     = "unknown"
-  description = "Tantive image (tag and digest) reported by /status.json (STATUS_TANTIVE_IMAGE)."
-}
-
 variable "status_model" {
   type        = string
   default     = "unknown"
@@ -155,4 +149,9 @@ variable "github_repository_owner_id" {
     condition     = can(regex("^[0-9]*$", var.github_repository_owner_id))
     error_message = "github_repository_owner_id must be digits."
   }
+}
+
+variable "terraform_service_account" {
+  type        = string
+  description = "Email of the service account HCP Terraform runs as (same value as TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL). It gets roles/iam.serviceAccountUser on the runtime accounts it attaches, and only on those."
 }

@@ -11,6 +11,8 @@
 locals {
   compatibility_date = "2026-09-01"
   module_type        = "application/javascript+module"
+  # /status.json shows what the nodes are pinned to: the TANTIVE_IMAGE line of node/desired.env, never typed by hand.
+  tantive_image = regex("(?m)^TANTIVE_IMAGE=(\\S+)$", file("${path.module}/../node/desired.env"))[0]
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -72,7 +74,7 @@ resource "cloudflare_workers_script" "site" {
     { name = "ORIGIN_REQUIRES_AUTH", type = "plain_text", text = var.origin_requires_auth },
     { name = "MAINTENANCE", type = "plain_text", text = var.maintenance },
     { name = "STATUS_COMMIT", type = "plain_text", text = var.status_commit },
-    { name = "STATUS_TANTIVE_IMAGE", type = "plain_text", text = var.tantive_image },
+    { name = "STATUS_TANTIVE_IMAGE", type = "plain_text", text = local.tantive_image },
     { name = "STATUS_MODEL", type = "plain_text", text = var.status_model },
     # Rate limit of /api/*, per client IP (approximate, per Cloudflare location). There is no zone ruleset for it: see
     # cloudflare.tf. Namespace ids are unique in the account (1001 and 1002 are the ingest Worker's).

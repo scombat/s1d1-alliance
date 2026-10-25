@@ -47,13 +47,13 @@ terraform validate
 | `cloudflare_api_token` | yes | none | token of the provider (permissions below) |
 | `deploy_version` | no | `v1` | `DEPLOY_VERSION`, part of the cache key: bump it to empty the cache |
 | `status_commit` | no | `unknown` | `STATUS_COMMIT` of `/status.json` |
-| `tantive_image` | no | `unknown` | `STATUS_TANTIVE_IMAGE` of `/status.json` |
 | `status_model` | no | `unknown` | `STATUS_MODEL` of `/status.json` |
 | `maintenance` | no | `0` | `"1"`: `/api/*` and `/ingest` answer 503, the landing stays up |
 | `cache_ttl` | no | `86400` | `CACHE_TTL` in seconds, a whole number greater than 0 |
 | `debug_cache_header` | no | `0` | `DEBUG_CACHE_HEADER`: `"1"` adds `x-s1d1-cache: HIT`/`MISS` to cached API answers (smoke tests only) |
 | `origin_requires_auth` | no | `0` | `ORIGIN_REQUIRES_AUTH`: `"1"` when the origin gates decisions behind a token; the site Worker then bypasses the cache |
 | `gcp_project` | no | none | Google Cloud project id; also names the raw bucket `<project>-s1d1-raw` (bucket names are global) |
+| `terraform_service_account` | no | none | email of the account HCP runs as (same as `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL`); gets `roles/iam.serviceAccountUser` on `anonymizer` and `eventarc-invoker` only |
 | `gcp_region` | no | `europe-west1` | bucket, Cloud Run, Artifact Registry, secrets, Eventarc trigger |
 | `billing_account` | no | none | billing account id (`000000-000000-000000`) for the budget |
 | `budget_amount` | no | `5` | monthly budget, whole units |
@@ -290,7 +290,7 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
    Admin, Service Usage Admin, Storage Admin, **Storage HMAC Key Admin (`roles/storage.hmacKeyAdmin`)** (Storage Admin
    does not grant `storage.hmacKeys.create`: the first apply failed on the HMAC key without it), Service Account Admin,
    Cloud Run Admin, Eventarc Admin, Pub/Sub Admin, Secret Manager Admin, Artifact Registry Administrator, Workload
-   Identity Pool Admin, `iam.serviceAccountUser` on the three runtime accounts, and Billing Account Costs Manager
+   Identity Pool Admin, `iam.serviceAccountUser` (at the project level for the first apply only: Terraform then grants it on `anonymizer` and `eventarc-invoker` and you remove the project-level one, see below), and Billing Account Costs Manager
    (or Billing Account Administrator) **on the billing account** for the budget. This account is the most powerful
    credential of the project: keep it out of the repository and rotate it.
 
@@ -302,6 +302,20 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
    `TFC_GCP_WORKLOAD_PROVIDER_NAME` (`projects/<number>/locations/global/workloadIdentityPools/hcp-terraform/providers/<provider>`).
    The alternative is a service account key in the sensitive environment variable `GOOGLE_CREDENTIALS`, which is a
    long-lived secret.
+
+   Set the workspace variable `terraform_service_account` (non-sensitive) to the same email. The bootstrap grants
+   `roles/iam.serviceAccountUser` on the whole project because the runtime accounts do not exist yet; the first apply
+   with `google_service_account_iam_member.terraform_acts_as_*` creates the narrow grants. **Only after that apply
+   succeeded**, remove the project-level one by hand:
+
+   ```sh
+   gcloud projects remove-iam-policy-binding <project> --member="serviceAccount:<hcp sa>" \
+     --role="roles/iam.serviceAccountUser" --condition=None
+   ```
+
+   `/status.json` takes its Tantive image from the `TANTIVE_IMAGE` line of `node/desired.env` (no variable any more):
+   delete the `tantive_image` workspace variable in HCP after merge (an undeclared variable only gives a warning, but
+   keep the workspace clean).
 4. **First image.** The image must exist in Artifact Registry before the Cloud Run service is created, so the first
    apply runs with `anonymizer_image` null (its default) and creates no anonymizer; the CI then pushes the image
    (`workflow_dispatch`), a pull request adds `terraform/images.auto.tfvars` with its digest, and the next apply
