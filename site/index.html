@@ -24,7 +24,7 @@
 <p class="lead">s1d1 reads a prompt once and tells your router how hard it is, what kind of task it is and whether it needs tools, so easy prompts go to cheap models and hard ones to strong models.</p>
 <div class="stats">
 <div class="stat hi"><b>Free</b><span>hosted API, no account, no key</span></div>
-<div class="stat"><b>~10–60 ms</b><span>server time per decision, measured; the network adds to it</span></div>
+<div class="stat"><b>~10 ms</b><span>server time for a short prompt, measured here; longer prompts take more, the network adds to it</span></div>
 <div class="stat"><b>19 tasks</b><span>multilingual, open weights (Apache-2.0)</span></div>
 </div>
 </header>
@@ -40,7 +40,7 @@
 </section>
 <section class="path">
 <h3>Run it yourself, privately</h3>
-<ul><li>One container, CPU only, ~10–60 ms of server time per decision.</li><li>Your prompts never leave your network.</li></ul>
+<ul><li>One container, CPU only, milliseconds per decision.</li><li>Your prompts never leave your network.</li></ul>
 <a class="btn" href="#self-host">Self-host with tantive ↓</a>
 </section>
 </div>
@@ -92,7 +92,7 @@
 <div class="step">1 · Route with LiteLLM (LiteLLM tab), with Claude models as tiers</div>
 <pre>tiers: { SIMPLE: <span class="k">claude-haiku</span>, MEDIUM: <span class="k">claude-sonnet</span>,
          COMPLEX: <span class="k">claude-opus</span>, REASONING: <span class="k">claude-opus</span> }</pre>
-<div class="step">2 · Point Claude Code at LiteLLM (run locally through LiteLLM 1.106.4)</div>
+<div class="step">2 · Point Claude Code at LiteLLM (not run with Claude Code itself yet)</div>
 <pre>export ANTHROPIC_BASE_URL=http://localhost:4000
 export ANTHROPIC_AUTH_TOKEN=<span class="k">your-litellm-key</span>
 export ANTHROPIC_MODEL=s1d1-auto
@@ -101,7 +101,7 @@ claude</pre>
 
 <div class="pane p-codex">
 <div class="step">1 · Route with LiteLLM (LiteLLM tab)</div>
-<div class="step">2 · ~/.codex/config.toml (run locally through LiteLLM 1.106.4)</div>
+<div class="step">2 · ~/.codex/config.toml (not run with Codex itself yet)</div>
 <pre>model = "s1d1-auto"
 model_provider = "litellm"
 
