@@ -202,7 +202,8 @@ These were verified against documentation only; the first deploy is where they a
    (the single rule there is the other subdomain's). Known trade-off: when the Workers daily request quota is
    exhausted the route fails open and `/api/*` goes to the tunnel with no rate limit.
 7. **Peak memory of the anonymizer**: after a real batch, read the peak memory of the Cloud Run revision (metrics
-   `container/memory/utilizations`) and compare with the 4 GiB limit; adjust only on that reading.
+   `container/memory/utilizations`) and compare with the limit. Done 2026-10-25: 4.1 to 4.6 GiB with both models, so
+   4 GiB was killed (signal 9) and Eventarc retried; the service now has 8 GiB and 2 vCPU.
 8. **Ingest rate limits (to verify at the first apply)**: the Cloudflare page on the Workers Rate Limiting binding does
    not say whether it is available on the Workers Free plan; check that the apply accepts the two `ratelimit`
    bindings of `s1d1-ingest` (namespace ids 1001 and 1002). Then, with `contract/fixtures/valid.ndjson` and no

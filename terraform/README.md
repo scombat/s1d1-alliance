@@ -159,7 +159,7 @@ ingest Worker --HMAC--> raw bucket --object finalized--> Eventarc --OIDC--> anon
   `eventarc-invoker` and the Eventarc trigger. The GCS service agent's `roles/pubsub.publisher` is created by the first
   apply, so that it has propagated when the trigger is created; a trigger refused on the service agent's permission
   the first time succeeds on the next run.
-- **Cloud Run** `s1d1-anonymizer`: internal ingress, 0 to 2 instances, 1 vCPU, **4 GiB**, concurrency 1, timeout 3600 s,
+- **Cloud Run** `s1d1-anonymizer`: internal ingress, 0 to 2 instances, 2 vCPU, **8 GiB** (measured peak 4.1 to 4.6 GiB on 2026-10-25; Cloud Run needs 2 vCPU above 4 GiB), concurrency 1, timeout 3600 s,
   CPU only during requests, startup CPU boost. Environment: `RAW_BUCKET`, `R2_ENDPOINT`, `R2_BUCKET=s1d1-clean`,
   `GLINER_MODEL_DIRS` (the image default, spelled out), `GLINER_THRESHOLD=0.5`; `R2_ACCESS_KEY_ID` and
   `R2_SECRET_ACCESS_KEY` from Secret Manager. Only `eventarc-invoker` may invoke it: there is no `allUsers` binding.
