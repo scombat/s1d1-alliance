@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/scombat/s1d1-alliance/security/advisories/new
+    about: Privately, through a security advisory, never in a public issue (see SECURITY.md).
+  - name: Serving-engine issue
+    url: https://github.com/scombat/s1d1-tantive/issues/new/choose
+    about: The service behind the instance is s1d1-tantive; its bugs and questions go there.
+  - name: Model behaviour
+    url: https://huggingface.co/scombat/s1d1-router/discussions
+    about: Wrong or surprising classifications belong to the discussions of the model on the Hugging Face Hub.
