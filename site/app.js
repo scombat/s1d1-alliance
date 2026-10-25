@@ -1,20 +1,41 @@
 // No cookie, no storage: the acceptance gate only lives in the page until it is closed.
 const gate = document.getElementById("accept");
-const gated = ["api-url", "tutorial", "try-box"].map((id) => document.getElementById(id));
+const tutorial = document.getElementById("tutorial");
 const toggle = () => {
-  for (const el of gated) {
-    if (gate.checked) el.removeAttribute("hidden");
-    else el.setAttribute("hidden", "");
-  }
+  if (gate.checked) tutorial.removeAttribute("hidden");
+  else tutorial.setAttribute("hidden", "");
 };
 gate.addEventListener("change", toggle);
 toggle(); // a browser may restore the box as checked without firing change
 
+// A copy button on each snippet; the clipboard is only written on a click.
+for (const pre of tutorial.querySelectorAll(".pane pre")) {
+  const box = document.createElement("div");
+  box.className = "snippet";
+  pre.replaceWith(box);
+  box.append(pre);
+  const btn = document.createElement("button");
+  btn.className = "copy";
+  btn.type = "button";
+  btn.textContent = "Copy";
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(pre.textContent);
+      btn.textContent = "Copied";
+    } catch {
+      btn.textContent = "Select and copy";
+    }
+    setTimeout(() => (btn.textContent = "Copy"), 1500);
+  });
+  box.append(btn);
+}
+
 const out = document.getElementById("try-out");
-document.getElementById("try-form").addEventListener("submit", async (ev) => {
+document.getElementById("try-box").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const text = document.getElementById("try-text").value.trim();
   if (!text) return;
+  out.removeAttribute("hidden");
   out.textContent = "...";
   try {
     const r = await fetch("/api/v1/systemone", {
@@ -23,7 +44,7 @@ document.getElementById("try-form").addEventListener("submit", async (ev) => {
       body: JSON.stringify({
         state: text,
         questions: {
-          tier: { type: "choice", criteria: { TRIVIAL: "", LOW: "", MEDIUM: "", HIGH: "", EXPERT: "" } },
+          tier: { type: "choice", criteria: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" } },
         },
       }),
     });

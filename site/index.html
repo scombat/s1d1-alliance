@@ -3,73 +3,199 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>s1d1-alliance: free community instance of the s1d1 router</title>
-<meta name="description" content="A free hosted instance of s1d1, a small multilingual model that scores prompt complexity for LLM routers.">
+<title>s1d1: send each prompt to the right model</title>
+<meta name="description" content="A free hosted instance of s1d1, a small multilingual model that scores prompt complexity for LLM routers. Or self-host it with s1d1-tantive.">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-<h1>s1d1-alliance</h1>
-<p class="lead">s1d1 is a small multilingual model that reads a prompt once and returns a complexity score, one task among 19 and a needs-tools flag, so an LLM router can send each request to the right model. This is a free community instance of it.</p>
+<nav><b>s1d1</b><span><a href="https://huggingface.co/scombat/s1d1-router">Model</a><a href="#self-host">Self-host</a><a href="https://github.com/scombat/s1d1-alliance">Infrastructure</a><a href="https://huggingface.co/spaces/scombat/s1d1-router-demo">In-browser demo</a></span></nav>
+
+<header class="hero">
+<h1>Send each prompt<br>to the right model.</h1>
+<p class="lead">s1d1 reads a prompt once and tells your router how hard it is, what kind of task it is and whether it needs tools, so easy prompts go to cheap models and hard ones to strong models.</p>
+<div class="stats">
+<div class="stat hi"><b>Free</b><span>hosted API, no account, no key</span></div>
+<div class="stat"><b>~20 ms</b><span>per decision, before the LLM call</span></div>
+<div class="stat"><b>19 tasks</b><span>multilingual, open weights (Apache-2.0)</span></div>
+</div>
 </header>
+
 <main>
-<div class="cols">
-<section class="card">
-<h2>Try without sending anything</h2>
-<p>The <a href="https://huggingface.co/spaces/scombat/s1d1-router-demo">private demo</a> runs the model in your browser: nothing leaves your machine.</p>
-<p>You can also self-host the same model with <a href="https://github.com/scombat/s1d1-tantive">s1d1-tantive</a>, or read the <a href="https://huggingface.co/scombat/s1d1-router">model card</a>.</p>
+<h2>Two ways to use it</h2>
+<p class="sub">Same model, same API. Only where it runs changes.</p>
+<div class="paths">
+<section class="path main">
+<h3>Use the free API, and contribute</h3>
+<ul><li>Nothing to install: point your router at one URL.</li><li>What you send is kept, anonymised and used to retrain s1d1.</li></ul>
+<a class="btn" href="#setup">Set it up ↓</a>
 </section>
-<section class="card">
-<h2>Use and contribute</h2>
-<p>This instance is free, and what you send improves s1d1. Tick the box to see the API URL and the tutorial.</p>
-<label class="gate"><input type="checkbox" id="accept"><span>Everything you send to this service is kept and used to retrain s1d1; using the API means you accept the <a href="/conditions/v1/">terms</a>.</span></label>
+<section class="path">
+<h3>Run it yourself, privately</h3>
+<ul><li>One container, CPU only, ~20 ms.</li><li>Your prompts never leave your network.</li></ul>
+<a class="btn" href="#self-host">Self-host with tantive ↓</a>
 </section>
 </div>
 
-<section id="api-url" hidden>
-<h2>API</h2>
-<p>Base URL: <code>https://s1d1.qoo.gy/api</code>. Paths: <code>POST /v1/systemone</code> (and <code>/v1/systemone/batch</code>), <code>/v1/decisions</code>, <code>/v1/chat/completions</code>, <code>/classify</code>, <code>/predict</code>; <code>GET /v1/models</code>. Limit: 100 requests per 10 s per IP; on a 429, retry later or fall back to your default model.</p>
-</section>
+<h2 id="setup">Set it up in two minutes</h2>
+<p class="sub">Pick what you use. Each snippet is complete: copy, paste, run.</p>
+<label class="gate"><input type="checkbox" id="accept"><span>Everything you send to this service is kept and used to retrain s1d1; using the API means you accept the <a href="/conditions/v1/">terms</a>. Tick to see the setup.</span></label>
 
-<section id="tutorial" hidden>
-<h2>Tutorial</h2>
-<h3>LiteLLM</h3>
-<p>LiteLLM 1.106 or later: register s1d1 as the classifier of the Auto Router in System One format, with <code>"classifier_type": "oss_classifier"</code> and <code>"opensource_classifier_config": {"provider": "laya", "model": "multilingual", "api_base": "https://s1d1.qoo.gy/api", "timeout_ms": 1000}</code>. The <code>api_base</code> is the service root: LiteLLM appends <code>/v1/systemone</code>. Before 1.106, use the chat-completions format with the base URL <code>https://s1d1.qoo.gy/api/v1</code>. Map the tiers it returns to your own models. Details: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a> in s1d1-tantive.</p>
-<h3>curl</h3>
+<div id="tutorial" hidden>
+<p id="api-url">Base URL: <code>https://s1d1.qoo.gy/api</code>. Self-hosting? Use your own URL instead in every snippet.</p>
+<div class="tabs" role="radiogroup" aria-label="Your tool">
+<input type="radio" name="tool" id="t-litellm" checked><label for="t-litellm">LiteLLM</label>
+<input type="radio" name="tool" id="t-claude"><label for="t-claude">Claude Code</label>
+<input type="radio" name="tool" id="t-codex"><label for="t-codex">Codex</label>
+<input type="radio" name="tool" id="t-omp"><label for="t-omp">oh-my-pi</label>
+<input type="radio" name="tool" id="t-n8n"><label for="t-n8n">n8n</label>
+<input type="radio" name="tool" id="t-curl"><label for="t-curl">curl</label>
+<input type="radio" name="tool" id="t-py"><label for="t-py">Python</label>
+<input type="radio" name="tool" id="t-other"><label for="t-other">Other gateways</label>
+<div class="panes">
+
+<div class="pane p-litellm">
+<div class="step">1 · config.yaml (LiteLLM 1.106 or later)</div>
+<pre>model_list:
+  <span class="c"># … your four models: cheap, medium, strong, reasoning</span>
+  - model_name: s1d1-auto
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_default_model: <span class="k">medium</span>
+      complexity_router_config:
+        classifier_type: oss_classifier
+        opensource_classifier_config:
+          provider: laya
+          model: multilingual
+          api_base: https://s1d1.qoo.gy/api
+          timeout_ms: 1000
+        classifier_fallback: default_model
+        tiers:
+          SIMPLE: <span class="k">cheap</span>
+          MEDIUM: <span class="k">medium</span>
+          COMPLEX: <span class="k">strong</span>
+          REASONING: <span class="k">reasoning</span></pre>
+<div class="step">2 · Call it like any model</div>
+<pre>"model": "s1d1-auto"</pre>
+<p class="note">If s1d1 is slow or unreachable, LiteLLM uses the default model: routing never blocks a request. Before 1.106, use the chat-completions format with the base URL <code>https://s1d1.qoo.gy/api/v1</code>. More in <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/litellm.md">docs/litellm.md</a>.</p>
+</div>
+
+<div class="pane p-claude">
+<div class="step">1 · Route with LiteLLM (LiteLLM tab), with Claude models as tiers</div>
+<pre>tiers: { SIMPLE: <span class="k">claude-haiku</span>, MEDIUM: <span class="k">claude-sonnet</span>,
+         COMPLEX: <span class="k">claude-opus</span>, REASONING: <span class="k">claude-opus</span> }</pre>
+<div class="step">2 · Point Claude Code at LiteLLM</div>
+<pre>export ANTHROPIC_BASE_URL=http://localhost:4000
+export ANTHROPIC_AUTH_TOKEN=<span class="k">your-litellm-key</span>
+export ANTHROPIC_MODEL=s1d1-auto
+claude</pre>
+</div>
+
+<div class="pane p-codex">
+<div class="step">1 · Route with LiteLLM (LiteLLM tab)</div>
+<div class="step">2 · ~/.codex/config.toml</div>
+<pre>model = "s1d1-auto"
+model_provider = "litellm"
+
+[model_providers.litellm]
+name = "LiteLLM"
+base_url = "http://localhost:4000/v1"
+env_key = "LITELLM_API_KEY"
+wire_api = "responses"</pre>
+</div>
+
+<div class="pane p-omp">
+<div class="step">1 · Route with LiteLLM (LiteLLM tab)</div>
+<div class="step">2 · ~/.omp/agent/models.yml</div>
+<pre>providers:
+  litellm:
+    baseUrl: http://localhost:4000/v1
+    apiKey: LITELLM_API_KEY
+    api: openai-completions
+    discovery:
+      type: openai-models-list  <span class="c"># finds s1d1-auto in LiteLLM's /v1/models</span></pre>
+<div class="step">3 · Run</div>
+<pre>omp --model litellm/s1d1-auto</pre>
+</div>
+
+<div class="pane p-n8n">
+<div class="step">An HTTP Request node, then a Switch node on the tier</div>
+<pre>POST https://s1d1.qoo.gy/api/v1/systemone
+Body (JSON): {"state": "{{ $json.prompt }}",
+  "questions": {"tier": {"type": "choice", "criteria":
+  {"SIMPLE": "", "MEDIUM": "", "COMPLEX": "", "REASONING": ""}}}}
+<span class="c"># Switch on {{ $json.answers.tier.choice }}</span></pre>
+</div>
+
+<div class="pane p-curl">
 <pre>curl -s https://s1d1.qoo.gy/api/v1/systemone \
-  -H 'content-type: application/json' -d '{
-  "state": "Write a Terraform module",
-  "questions": {"tier": {"type": "choice",
-    "criteria": {"TRIVIAL": "", "LOW": "", "MEDIUM": "", "HIGH": "", "EXPERT": ""}}}}'</pre>
-<h3>n8n</h3>
-<p>Use an HTTP Request node that POSTs the same JSON to that URL, then branch on the returned tier.</p>
-</section>
+  -H 'content-type: application/json' \
+  -d '{"state":"Write a Terraform module","questions":{"tier":
+  {"type":"choice","criteria":{"SIMPLE":"","MEDIUM":"","COMPLEX":"","REASONING":""}}}}'</pre>
+<p class="note">Other paths: <code>/v1/systemone/batch</code>, <code>/v1/decisions</code>, <code>/v1/chat/completions</code>, <code>/classify</code>, <code>/predict</code>; <code>GET /v1/models</code>.</p>
+</div>
 
-<section id="try-box" hidden>
-<h2>Try it</h2>
-<form id="try-form">
+<div class="pane p-py">
+<pre>import httpx
+
+def classify(prompt: str) -> str:
+    r = httpx.post("https://s1d1.qoo.gy/api/v1/systemone", json={
+        "state": prompt,
+        "questions": {"tier": {"type": "choice", "criteria":
+            {"SIMPLE": "", "MEDIUM": "", "COMPLEX": "", "REASONING": ""}}}},
+        timeout=1.0)
+    return r.json()["answers"]["tier"]["choice"]</pre>
+</div>
+
+<div class="pane p-other">
+<div class="step">OpenRouter, Portkey, your own proxy: ask s1d1 first, then pick the model</div>
+<pre>from openai import OpenAI
+
+MODELS = {"SIMPLE": <span class="k">"cheap"</span>, "MEDIUM": <span class="k">"medium"</span>,
+          "COMPLEX": <span class="k">"strong"</span>, "REASONING": <span class="k">"reasoning"</span>}
+tier = classify(prompt)  <span class="c"># the function of the Python tab</span>
+client = OpenAI(base_url=<span class="k">"https://openrouter.ai/api/v1"</span>, api_key=KEY)
+client.chat.completions.create(model=MODELS[tier], messages=[...])</pre>
+<p class="note">Any gateway that takes a model name works this way.</p>
+</div>
+
+</div>
+</div>
+<p class="note">Limit: 100 requests per 10 s per IP. On a 429 or a 503, fall back to your default model.</p>
+
+<h3>Try it here</h3>
+<form id="try-box">
 <textarea id="try-text" aria-label="Prompt to classify" placeholder="Paste a prompt"></textarea>
-<p><button type="submit">Classify</button></p>
+<p><button class="go" type="submit">Classify</button></p>
 </form>
-<pre id="try-out" aria-live="polite"></pre>
-</section>
+<pre id="try-out" aria-live="polite" hidden></pre>
+</div>
 
-<section>
-<h2>Contribute</h2>
-<p>Requests to this instance are kept, anonymised and used to retrain the model. To send your own self-hosted captures, follow the <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/capture.md">capture guide</a>; the wire format is in <a href="https://github.com/scombat/s1d1-alliance/blob/main/contract/ingest-v1.md">contract/ingest-v1.md</a>. The infrastructure is public in <a href="https://github.com/scombat/s1d1-alliance">s1d1-alliance</a>.</p>
-</section>
+<h2 id="self-host">Run it yourself</h2>
+<p class="sub">The same server as this site, in one container. Nothing is sent anywhere unless you turn contribution on.</p>
+<div class="self">
+<pre>docker run -p 8788:8788 \
+  ghcr.io/scombat/s1d1-tantive:0.8.1-small-onnx-int8
+<span class="c"># then use http://localhost:8788 as api_base</span></pre>
+<ul>
+<li>CPU only, amd64 and arm64, 1 GiB of RAM.</li>
+<li>Signed images and checksummed weights.</li>
+<li>Optional: <a href="https://github.com/scombat/s1d1-tantive/blob/main/docs/capture.md">send your captures here</a> to help retrain s1d1 (wire format: <a href="https://github.com/scombat/s1d1-alliance/blob/main/contract/ingest-v1.md">contract/ingest-v1.md</a>).</li>
+<li><a href="https://github.com/scombat/s1d1-tantive">s1d1-tantive on GitHub</a> (BSL 1.1).</li>
+</ul>
+</div>
 
-<section>
 <h2>What runs here</h2>
-<dl>
-<dt>Commit</dt><dd id="st-commit">...</dd>
-<dt>tantive image</dt><dd id="st-tantive_image">...</dd>
-<dt>Model</dt><dd id="st-model">...</dd>
-</dl>
-</section>
+<p class="sub">Everything is public in <a href="https://github.com/scombat/s1d1-alliance">s1d1-alliance</a>. Check the digest against the repository.</p>
+<div class="runs">
+<div><b>Model</b><code id="st-model">...</code></div>
+<div><b>Image</b><code id="st-tantive_image">...</code></div>
+<div><b>Commit</b><code id="st-commit">...</code></div>
+</div>
 </main>
+
 <footer>
-<a href="/conditions/v1/">Conditions</a> · <a href="/confidentialite/v1/">Confidentialité</a> · <a href="/mentions-legales/">Mentions légales</a> · <a href="/llms.txt">llms.txt</a>
+<span>Model and infrastructure Apache-2.0 · engine BSL 1.1</span>
+<span><a href="/conditions/v1/">Conditions</a> · <a href="/confidentialite/v1/">Confidentialité</a> · <a href="/mentions-legales/">Mentions légales</a> · <a href="/llms.txt">llms.txt</a></span>
 </footer>
 <script src="/app.js"></script>
 </body>
