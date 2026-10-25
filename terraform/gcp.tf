@@ -335,6 +335,30 @@ resource "google_project_iam_member" "eventarc_invoker_receives" {
   member  = "serviceAccount:${google_service_account.eventarc_invoker.email}"
 }
 
+# The two Google-managed service agents that Eventarc needs. Both were granted by hand at the first deployment
+# (2026-10-25); Terraform now grants them, non-authoritatively, so a fresh install does not fail the same way.
+# A service agent exists only once its API is enabled (and sometimes only after first use): hence the dependency on the
+# API, and if an agent still does not exist, `gcloud beta services identity create --service=<api>` creates it
+# (the provider's google_project_service_identity is beta-only and the google-beta provider is not used here).
+
+# Eventarc's own agent: manages the trigger's Pub/Sub plumbing.
+resource "google_project_iam_member" "eventarc_agent" {
+  project = var.gcp_project
+  role    = "roles/eventarc.serviceAgent"
+  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
+
+  depends_on = [google_project_service.api["eventarc.googleapis.com"]]
+}
+
+# Pub/Sub's agent: signs the OIDC token of the push to Cloud Run on behalf of eventarc-invoker.
+resource "google_project_iam_member" "pubsub_agent_token_creator" {
+  project = var.gcp_project
+  role    = "roles/iam.serviceAccountTokenCreator"
+  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+
+  depends_on = [google_project_service.api["pubsub.googleapis.com"]]
+}
+
 resource "google_eventarc_trigger" "raw_finalized" {
   count = local.anonymizer_enabled ? 1 : 0
 
@@ -366,6 +390,8 @@ resource "google_eventarc_trigger" "raw_finalized" {
   depends_on = [
     google_project_iam_member.gcs_agent_publishes,
     google_project_iam_member.eventarc_invoker_receives,
+    google_project_iam_member.eventarc_agent,
+    google_project_iam_member.pubsub_agent_token_creator,
     google_cloud_run_v2_service_iam_member.eventarc_invokes,
   ]
 }
