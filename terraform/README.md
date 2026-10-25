@@ -105,6 +105,12 @@ Read one with `terraform output -raw community_token` (or in the workspace page)
 - Three `ratelimit` bindings, per client IP: `API_BURST` on `s1d1-site` (100 per 10 s, namespace 1003, `/api/*`: see
   `workers/site/README.md`), and `INGEST_BURST` (100 per 10 s, namespace 1001) and `INGEST_SUSTAINED` (100 per 60 s,
   namespace 1002) on `s1d1-ingest`, community node exempt: see `workers/ingest/README.md`.
+  **Measured 2026-10-25: these bindings did not limit anything** (430 requests to `/api` and 130 to `/ingest` from one
+  IP, all accepted, bindings never logged as missing or failing). They are kept, with no effect for now.
+- Workers Logs are pinned in `workers.tf` (`observability`) on both Workers: logs and persistence on, head sampling 1,
+  traces off, **invocation logs off on purpose** (they store request and client details at Cloudflare, against the
+  privacy policy: no IP or headers recorded). Never enable them from the dashboard: the next apply reverts it.
+  `workers/ingest/test/terraform.test.js` fails if either Worker stops declaring `invocation_logs = false`.
 - R2 bucket `s1d1-clean` (jurisdiction `eu`) and an API token limited to it, with the one permission group
   `Workers R2 Storage Bucket Item Write`: the anonymizer only writes (`PutObject`), so `Item Read` is not granted. R2
   has no write-only object permission: `Item Write` is the dashboard's "Object Read & Write" and also allows reading
@@ -318,3 +324,5 @@ and the URL of `node/desired.env` on `main`. Server and firewall carry the label
   approximate and per Cloudflare location. Trade-off: when the Workers daily request quota is exhausted the route
   fails open (manual step 1), `/api/*` goes straight to the tunnel and has no rate limit; the tunnel ingress still
   allows the API paths only and the deadline shedding of tantive still protects its capacity.
+  In practice the binding was measured as not enforcing anything (2026-10-25, see above); a Durable Object limiter is the
+  planned answer if abuse shows in the analytics.

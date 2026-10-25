@@ -1,8 +1,9 @@
 // Ingestion Worker: POST /ingest receives NDJSON batches of classified prompts (contract/ingest-v1.md),
 // validates each line, adds `source` and `received`, and writes the batch as one object to the raw bucket.
 // Nothing here logs a body, a line or a header.
-// Per-IP limits (Workers Rate Limiting bindings INGEST_BURST and INGEST_SUSTAINED) apply to everyone except the
-// community node, which is recognised by its token before the limits are asked.
+// Per-IP limits (Workers Rate Limiting bindings INGEST_BURST and INGEST_SUSTAINED) are asked for everyone except the
+// community node, which is recognised by its token first. Measured on 2026-10-25: Cloudflare answers "allowed" every
+// time at our scale, so they do not block in practice (see README.md).
 import { putRaw } from "./gcs.js";
 import { isCommunity, sourceOf, validateLine } from "./validate.js";
 
