@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import worker, { handle } from "../src/index.js";
 import { validateLine, sourceOf, constantTimeEqual } from "../src/validate.js";
 import { putRaw } from "../src/gcs.js";
+import { clientKey } from "../src/limit.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => readFileSync(join(here, "../../../contract/fixtures", name), "utf8");
@@ -16,16 +17,14 @@ const MIXED = fixture("mixed.ndjson");
 const TOKEN = "community-token-for-tests";
 const UUID_1 = "6f1c2a9e-3b7d-4e8a-9c21-5d0b8e7f4a12";
 const UUID_2 = "a3b1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
-const keys = [];
-/** A rate limit binding that records the keys it is asked about and answers `success`. */
-const limiter = (success = true, seen = keys) => ({
-  limit: async ({ key }) => {
-    seen.push(key);
-    return { success };
-  },
+const SALT = "salt-for-tests";
+/** A LIMITER binding (Durable Object namespace) that records the names and rules it is asked about. */
+const limiter = ({ ok = true, retryAfter = 9, names = [], rules = [] } = {}) => ({
+  idFromName: (name) => (names.push(name), { name }),
+  get: () => ({ hit: async (r) => (rules.push(r), ok ? { ok: true } : { ok: false, retryAfter }) }),
 });
 const baseEnv = { RAW_BUCKET: "raw-test", GCS_HMAC_ID: "id", GCS_HMAC_SECRET: "secret", COMMUNITY_TOKEN: TOKEN };
-const env = { ...baseEnv, INGEST_BURST: limiter(), INGEST_SUSTAINED: limiter() };
+const env = { ...baseEnv, LIMITER: limiter(), LIMIT_SALT: SALT };
 
 function recorder(fail = false) {
   const calls = [];
@@ -331,113 +330,89 @@ async function withLogs(fn) {
   return logged.join("\n");
 }
 
-test("over the burst limit: 429 rate_limited, Retry-After 10, nothing written", async () => {
+test("over a limit: 429 rate_limited, Retry-After from the limiter, nothing written", async () => {
   const deps = recorder();
-  const e = { ...env, INGEST_BURST: limiter(false) };
+  const e = { ...env, LIMITER: limiter({ ok: false }) };
   const res = await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), e, deps);
   assert.equal(res.status, 429);
-  assert.equal(res.headers.get("retry-after"), "10");
+  assert.equal(res.headers.get("retry-after"), "9");
   assert.equal(res.headers.get("content-type"), "application/json");
   assert.deepEqual(await res.json(), { error: "rate_limited" });
   assert.equal(deps.calls.length, 0);
 });
 
-test("over the sustained limit only: 429, Retry-After 60, nothing written", async () => {
-  const deps = recorder();
-  const e = { ...env, INGEST_SUSTAINED: limiter(false) };
-  const res = await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), e, deps);
-  assert.equal(res.status, 429);
-  assert.equal(res.headers.get("retry-after"), "60");
-  assert.deepEqual(await res.json(), { error: "rate_limited" });
-  assert.equal(deps.calls.length, 0);
-});
-
-test("when both refuse, the burst answer comes first and the sustained budget is not used", async () => {
-  const sustainedKeys = [];
-  const e = { ...env, INGEST_BURST: limiter(false), INGEST_SUSTAINED: limiter(false, sustainedKeys) };
-  const res = await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), e, recorder());
-  assert.equal(res.headers.get("retry-after"), "10");
-  assert.deepEqual(sustainedKeys, []);
-});
-
-test("within both limits the batch goes through, and both are asked", async () => {
-  const burstKeys = [];
-  const sustainedKeys = [];
-  const e = { ...env, INGEST_BURST: limiter(true, burstKeys), INGEST_SUSTAINED: limiter(true, sustainedKeys) };
+test("within the limits the batch goes through, and the limiter is asked once with the /ingest rules", async () => {
+  const rules = [];
+  const e = { ...env, LIMITER: limiter({ rules }) };
   const deps = recorder();
   const res = await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), e, deps);
   assert.equal(res.status, 202);
   assert.equal(deps.calls.length, 1);
-  assert.deepEqual(burstKeys, ["203.0.113.7"]);
-  assert.deepEqual(sustainedKeys, ["203.0.113.7"]);
+  assert.deepEqual(rules, [[{ name: "10s", limit: 100, period: 10 }, { name: "60s", limit: 100, period: 60 }]]);
 });
 
-test("the limit key is the cf-connecting-ip value, or unknown when absent; an instance id is not a key", async () => {
-  const seen = [];
-  const e = { ...env, INGEST_BURST: limiter(true, seen), INGEST_SUSTAINED: limiter(true, seen) };
+test("the limiter instance is ingest:<HMAC of cf-connecting-ip, or of unknown>; an instance id is not a key", async () => {
+  const names = [];
+  const e = { ...env, LIMITER: limiter({ names }) };
   await handle(post(VALID, { "cf-connecting-ip": "2001:db8::1", "x-forwarded-for": "198.51.100.9" }), e, recorder());
   await handle(post(VALID), e, recorder());
-  assert.deepEqual(seen, ["2001:db8::1", "2001:db8::1", "unknown", "unknown"]);
+  assert.deepEqual(names, [`ingest:${await clientKey(SALT, "2001:db8::1")}`, `ingest:${await clientKey(SALT, "unknown")}`]);
+  assert.ok(!names.join().includes("2001:db8"));
 });
 
-test("the community token is exempt even when both limits refuse, and they are not even asked", async () => {
-  const seen = [];
-  const e = { ...env, INGEST_BURST: limiter(false, seen), INGEST_SUSTAINED: limiter(false, seen) };
+test("the community token is exempt even when the limiter refuses, and it is not even asked", async () => {
+  const names = [];
+  const e = { ...env, LIMITER: limiter({ ok: false, names }) };
   const deps = recorder();
   const res = await handle(post(VALID, { authorization: `Bearer ${TOKEN}`, "cf-connecting-ip": "203.0.113.7" }), e, deps);
   assert.equal(res.status, 202);
   assert.equal(deps.calls.length, 1);
-  assert.deepEqual(seen, []);
+  assert.deepEqual(names, []);
   // A wrong token is not exempt.
   const wrong = await handle(post(VALID, { authorization: "Bearer nope" }), e, recorder());
   assert.equal(wrong.status, 429);
 });
 
 test("the checks before the limits stay before: maintenance, method and path are not rate limited", async () => {
-  const seen = [];
-  const e = { ...env, INGEST_BURST: limiter(false, seen), INGEST_SUSTAINED: limiter(false, seen) };
+  const names = [];
+  const e = { ...env, LIMITER: limiter({ ok: false, names }) };
   assert.equal((await handle(post(VALID), { ...e, MAINTENANCE: "1" }, recorder())).status, 503);
   assert.equal((await handle(post(undefined, {}, "GET"), e, recorder())).status, 405);
   const other = new Request("https://s1d1.qoo.gy/other", { method: "POST", body: "x" });
   assert.equal((await handle(other, e, recorder())).status, 404);
-  assert.deepEqual(seen, []);
+  assert.deepEqual(names, []);
   // After the limits: a request over the limit is refused with 429 before its content type is judged.
   assert.equal((await handle(post(VALID, { "content-type": "text/plain" }), e, recorder())).status, 429);
 });
 
-test("missing bindings fail open, with one log line per missing binding and no request data", async () => {
-  const deps = recorder();
-  let res;
+test("a missing LIMITER or LIMIT_SALT, or a throwing limiter, fails open with one log line and no request data", async () => {
+  const noSalt = { ...env };
+  delete noSalt.LIMIT_SALT;
+  const throwing = {
+    ...env,
+    LIMITER: { idFromName: () => ({}), get: () => ({ hit: async () => { throw new Error("down 203.0.113.7"); } }) },
+  };
+  const statuses = [];
   const logs = await withLogs(async () => {
-    res = await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), baseEnv, deps);
+    for (const e of [baseEnv, noSalt, throwing]) {
+      const deps = recorder();
+      statuses.push((await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), e, deps)).status);
+      assert.equal(deps.calls.length, 1);
+    }
   });
-  assert.equal(res.status, 202);
-  assert.equal(deps.calls.length, 1);
+  assert.deepEqual(statuses, [202, 202, 202]);
   const lines = logs.split("\n");
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /INGEST_BURST is missing/);
-  assert.match(lines[1], /INGEST_SUSTAINED is missing/);
-  assert.ok(!logs.includes("203.0.113.7"));
-  assert.ok(!logs.includes("prompt"));
-  // One binding missing: the other still applies.
-  const half = await handle(post(VALID), { ...baseEnv, INGEST_SUSTAINED: limiter(false) }, recorder());
-  assert.equal(half.status, 429);
-});
-
-test("a binding that throws fails open for that limit", async () => {
-  const boom = { limit: async () => { throw new Error("binding down 203.0.113.7"); } };
-  let res;
-  const logs = await withLogs(async () => {
-    res = await handle(post(VALID, { "cf-connecting-ip": "203.0.113.7" }), { ...env, INGEST_BURST: boom }, recorder());
-  });
-  assert.equal(res.status, 202);
-  assert.ok(!logs.includes("203.0.113.7"));
+  assert.deepEqual(lines, [
+    "ingest: limiter is missing, not enforced",
+    "ingest: limiter is missing, not enforced",
+    "ingest: limiter failed, not enforced",
+  ]);
 });
 
 test("a 429 never logs the body, the token or the ip", async () => {
   const secret = "ultra-secret-prompt-text";
   const body = JSON.stringify({ v: 1, id: "a", prompt: secret, terms_version: "v1" }) + "\n";
-  const e = { ...env, INGEST_BURST: limiter(false) };
+  const e = { ...env, LIMITER: limiter({ ok: false }) };
   let res;
   const logs = await withLogs(async () => {
     res = await handle(post(body, { authorization: "Bearer not-the-token", "cf-connecting-ip": "203.0.113.7" }), e, recorder());

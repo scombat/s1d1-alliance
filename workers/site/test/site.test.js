@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import worker, { handle } from "../src/index.js";
 import { isAllowed, ALLOWED_POST, ALLOWED_GET } from "../src/api.js";
 import { cacheKey } from "../src/cache.js";
+import { clientKey } from "../src/limit.js";
 
 const ORIGIN = "https://origin.example";
 const baseEnv = {
@@ -16,6 +17,16 @@ const baseEnv = {
   STATUS_MODEL: "s1d1-small",
 };
 const DECISION = JSON.stringify({ tier: "mid", score: 0.42 });
+
+const SALT = "salt-for-tests";
+
+/** A LIMITER binding (Durable Object namespace) that records the names and rules it is asked about. */
+function fakeLimiter({ ok = true, retryAfter = 7, names = [], rules = [] } = {}) {
+  return {
+    idFromName: (name) => (names.push(name), { name }),
+    get: () => ({ hit: async (r) => (rules.push(r), ok ? { ok: true } : { ok: false, retryAfter }) }),
+  };
+}
 
 /** Fakes: the Cache API (only GET keys), the origin, ASSETS and the Analytics Engine dataset. */
 function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {}, limitSuccess = true } = {}) {
@@ -55,7 +66,8 @@ function fakes({ originStatus = 200, originBody = DECISION, originHeaders = {}, 
     ...baseEnv,
     ASSETS: { fetch: async (req) => (assetCalls.push(new URL(req.url).pathname), new Response("asset")) },
     VISITS: { writeDataPoint: (p) => points.push(p) },
-    API_BURST: { limit: async ({ key }) => (limitKeys.push(key), { success: limitSuccess }) },
+    LIMITER: fakeLimiter({ ok: limitSuccess, names: limitKeys }),
+    LIMIT_SALT: SALT,
   };
   const waits = [];
   const ctx = { waitUntil: (p) => waits.push(p) };
@@ -316,13 +328,13 @@ test("a hit is not served during maintenance", async () => {
   assert.equal(res.status, 503);
 });
 
-// ---- /api rate limit (API_BURST binding) --------------------------------------------------------------------
+// ---- /api rate limit (Limiter Durable Object) -----------------------------------------------------------------
 
-test("over the limit: 429 rate_limited, Retry-After 10, the origin and the cache are not touched", async () => {
+test("over the limit: 429 rate_limited, Retry-After from the limiter, the origin and the cache are not touched", async () => {
   const f = fakes({ limitSuccess: false });
   const res = await run(f, api("/api/v1/decisions", '{"prompt":"hello"}'));
   assert.equal(res.status, 429);
-  assert.equal(res.headers.get("retry-after"), "10");
+  assert.equal(res.headers.get("retry-after"), "7");
   assert.equal(res.headers.get("content-type"), "application/json");
   assert.deepEqual(await res.json(), { error: "rate_limited" });
   await f.settle();
@@ -343,20 +355,24 @@ test("over the limit: the body is not read", async () => {
   assert.equal(req.bodyUsed, false);
 });
 
-test("under the limit: the request goes through as usual, with the limiter asked once", async () => {
+test("under the limit: the request goes through as usual, with the limiter asked once with the /api rules", async () => {
   const f = fakes();
+  const rules = [];
+  f.env.LIMITER = fakeLimiter({ names: f.limitKeys, rules });
   const res = await run(f, api("/api/v1/decisions", '{"prompt":"hello"}'));
   assert.equal(res.status, 200);
   assert.equal(await res.text(), DECISION);
   assert.equal(f.originCalls.length, 1);
   assert.equal(f.limitKeys.length, 1);
+  assert.deepEqual(rules, [[{ name: "10s", limit: 30, period: 10 }, { name: "1h", limit: 1000, period: 3600 }]]);
 });
 
-test("the limit key is cf-connecting-ip, then \"unknown\"", async () => {
+test("the limiter instance is named api:<HMAC of cf-connecting-ip, then of \"unknown\">, never the IP", async () => {
   const f = fakes();
   await run(f, api("/api/classify", "{}", { headers: { "cf-connecting-ip": "203.0.113.9" } }));
   await run(f, api("/api/classify", "{}"));
-  assert.deepEqual(f.limitKeys, ["203.0.113.9", "unknown"]);
+  assert.deepEqual(f.limitKeys, [`api:${await clientKey(SALT, "203.0.113.9")}`, `api:${await clientKey(SALT, "unknown")}`]);
+  assert.ok(!f.limitKeys.join().includes("203.0.113"));
 });
 
 test("a cache HIT is counted too: the limiter is asked before the cache lookup", async () => {
@@ -369,7 +385,7 @@ test("a cache HIT is counted too: the limiter is asked before the cache lookup",
   assert.equal(f.originCalls.length, 1, "served from the cache");
   assert.equal(f.limitKeys.length, 2, "the hit used budget");
   // and a limited caller does not get the cached answer
-  f.env.API_BURST = { limit: async () => ({ success: false }) };
+  f.env.LIMITER = fakeLimiter({ ok: false });
   const limited = await run(f, api("/api/classify", '{"a":1}'));
   assert.equal(limited.status, 429);
 });
@@ -391,26 +407,27 @@ test("an unknown /api path is 404 and a wrong method is 405, without asking the 
   assert.equal(f.limitKeys.length, 0);
 });
 
-test("a missing or throwing API_BURST binding fails open with one log line and no request data", async () => {
+test("a missing LIMITER or LIMIT_SALT, or a throwing limiter, fails open with one log line and no request data", async () => {
   const warn = mock.method(console, "warn", () => {});
   try {
     const f = fakes();
-    const missing = { ...f.env };
-    delete missing.API_BURST;
-    const req = api("/api/v1/decisions", '{"prompt":"secret"}', { headers: { "cf-connecting-ip": "203.0.113.9" } });
-    const res = await handle(req, missing, f.ctx, { fetch: f.fetch, cache: f.cache });
-    assert.equal(res.status, 200);
-    assert.equal(warn.mock.callCount(), 1);
-
-    const throwing = { ...f.env, API_BURST: { limit: async () => { throw new Error("rate limit down 203.0.113.9"); } } };
-    const res2 = await handle(api("/api/v1/decisions", '{"prompt":"other"}', { headers: { "cf-connecting-ip": "203.0.113.9" } }), throwing, f.ctx, { fetch: f.fetch, cache: f.cache });
-    assert.equal(res2.status, 200);
-    assert.equal(warn.mock.callCount(), 2);
-
+    const req = () => api("/api/v1/decisions", '{"prompt":"secret"}', { headers: { "cf-connecting-ip": "203.0.113.9" } });
+    const noLimiter = { ...f.env };
+    delete noLimiter.LIMITER;
+    const noSalt = { ...f.env };
+    delete noSalt.LIMIT_SALT;
+    const throwing = {
+      ...f.env,
+      LIMITER: { idFromName: () => ({}), get: () => ({ hit: async () => { throw new Error("down 203.0.113.9"); } }) },
+    };
+    for (const e of [noLimiter, noSalt, throwing]) {
+      const res = await handle(req(), e, f.ctx, { fetch: f.fetch, cache: f.cache });
+      assert.equal(res.status, 200);
+    }
+    assert.equal(warn.mock.callCount(), 3);
     for (const call of warn.mock.calls) {
       assert.equal(call.arguments.length, 1);
-      assert.match(call.arguments[0], /API_BURST/);
-      assert.doesNotMatch(call.arguments[0], /203\.0\.113|secret|prompt/);
+      assert.match(call.arguments[0], /^api: limiter (is missing|failed), not enforced$/);
     }
   } finally {
     warn.mock.restore();

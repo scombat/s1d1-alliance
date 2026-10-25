@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// A missing rate limit binding makes the Worker fail open, so production must declare both. Reading the Terraform
+// A missing LIMITER binding or LIMIT_SALT makes the Worker fail open, so production must declare both. Reading the Terraform
 // source is crude but it runs without Terraform and fails the build when a binding is removed or renamed.
 const here = dirname(fileURLToPath(import.meta.url));
 const workersTf = readFileSync(join(here, "../../../terraform/workers.tf"), "utf8");
@@ -19,31 +19,21 @@ function ingestResource() {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
-const EXPECTED = {
-  INGEST_BURST: { limit: 100, period: 10 },
-  INGEST_SUSTAINED: { limit: 100, period: 60 },
-};
-
-for (const [name, { limit, period }] of Object.entries(EXPECTED)) {
-  test(`terraform declares the ${name} rate limit binding of the ingest Worker (${limit} per ${period} s)`, () => {
-    const lines = ingestResource().split("\n").filter((l) => l.includes(`name = "${name}"`));
-    assert.equal(lines.length, 1, `${name} must be declared exactly once in the ingest Worker bindings`);
-    assert.match(lines[0], /type\s*=\s*"ratelimit"/);
-    assert.match(lines[0], /namespace_id\s*=\s*"\d+"/);
-    assert.match(lines[0], new RegExp(`simple\\s*=\\s*\\{\\s*limit\\s*=\\s*${limit},\\s*period\\s*=\\s*${period}\\s*\\}`));
-    assert.ok(indexJs.includes(`"${name}"`), `${name} is not used by src/index.js`);
-  });
-}
-
-test("the two rate limit namespace ids are distinct", () => {
-  const ids = [...ingestResource().matchAll(/type = "ratelimit", namespace_id = "(\d+)"/g)].map((m) => m[1]);
-  assert.equal(ids.length, 2);
-  assert.notEqual(ids[0], ids[1]);
+test("terraform declares the LIMITER and LIMIT_SALT bindings of the ingest Worker, and its limit.js", () => {
+  const body = ingestResource();
+  assert.match(
+    body,
+    /\{ name = "LIMITER", type = "durable_object_namespace", class_name = "Limiter", script_name = cloudflare_workers_script\.limiter\.script_name \}/,
+  );
+  assert.match(body, /\{ name = "LIMIT_SALT", type = "secret_text", text = random_password\.limit_salt\.result \}/);
+  assert.match(body, /"src\/limit\.js" = \{\s*content_file = "\$\{path\.module\}\/\.\.\/workers\/ingest\/src\/limit\.js"/);
+  assert.doesNotMatch(body, /"ratelimit"/);
+  assert.ok(indexJs.includes('from "./limit.js"'), "src/index.js does not use limit.js");
 });
 
 // Invocation logs store per-request metadata (request, response, client details) at Cloudflare, against the privacy
 // policy (no IP or headers recorded). They are pinned off in Terraform so a dashboard change is reverted by the next apply.
-for (const name of ["site", "ingest"]) {
+for (const name of ["site", "ingest", "limiter"]) {
   test(`terraform declares invocation logs disabled on the ${name} Worker`, () => {
     const start = workersTf.indexOf(`resource "cloudflare_workers_script" "${name}"`);
     assert.notEqual(start, -1, `${name} Worker resource not found`);
@@ -58,7 +48,7 @@ for (const name of ["site", "ingest"]) {
 // Refresh copies every non-null observability value the settings API returns into the state (provider 5.28.1). A
 // value the API fills in by itself but the block leaves unset (logs and traces `destinations`, the traces' sampling
 // rate) makes each plan show both Workers as changed in place. terraform/README.md, Workers Logs.
-for (const name of ["site", "ingest"]) {
+for (const name of ["site", "ingest", "limiter"]) {
   test(`terraform writes out the observability values the API returns on the ${name} Worker`, () => {
     const start = workersTf.indexOf(`resource "cloudflare_workers_script" "${name}"`);
     assert.notEqual(start, -1, `${name} Worker resource not found`);

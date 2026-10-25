@@ -1,9 +1,10 @@
 // Site Worker for s1d1.qoo.gy: static landing (ASSETS), the /api allow-list relayed to the origin, a body-hash
 // cache for the decision endpoints, one visit point per landing view (country only), and /status.json.
-// /api/* is rate limited per client IP by the Workers Rate Limiting binding API_BURST (there is no zone rule: the
-// zone's single free rule belongs to another subdomain). Nothing here logs a body, a prompt, an IP or a header.
+// /api/* is rate limited per client by the Limiter Durable Object (./limit.js, workers/limiter; there is no zone rule:
+// the zone's single free rule belongs to another subdomain). Nothing here logs a body, a prompt, an IP or a header.
 import { isAllowed, isApiPath, methodsFor } from "./api.js";
 import { DEFAULT_TTL, cacheKey, keyRequest, storable } from "./cache.js";
+import { overLimit } from "./limit.js";
 
 export const MAX_BODY = 1_048_576;
 
@@ -15,24 +16,11 @@ const json = (status, body, headers = {}) =>
 
 const empty = (status, headers = {}) => new Response(null, { status, headers });
 
-/**
- * True when the client IP is over the /api limit. A binding that is missing (local run, tests) or that throws does
- * not stop the request (fail open): the log line names the binding only, never a request datum.
- */
-async function overLimit(env, request) {
-  const binding = env.API_BURST;
-  if (typeof binding?.limit !== "function") {
-    console.warn("site: rate limit binding API_BURST is missing, not enforced");
-    return false;
-  }
-  try {
-    const { success } = await binding.limit({ key: request.headers.get("cf-connecting-ip") || "unknown" });
-    return !success;
-  } catch {
-    console.warn("site: rate limit binding API_BURST failed, not enforced");
-    return false;
-  }
-}
+/** The /api limits per client: 30 per 10 s and 1 000 per hour (docs/31 of the project). */
+export const API_LIMITS = [
+  { name: "10s", limit: 30, period: 10 },
+  { name: "1h", limit: 1000, period: 3600 },
+];
 
 /** The body as bytes, or null when it is over MAX_BODY (checked on Content-Length, then while reading). */
 async function readCapped(request) {
@@ -78,7 +66,8 @@ async function handleApi(request, env, ctx, deps, path) {
 
   // After the allow-list (an unknown path is a 404 that uses no budget), before the body and the cache: a cache HIT
   // counts too, the limit protects the edge as well as the origin.
-  if (await overLimit(env, request)) return json(429, { error: "rate_limited" }, { "retry-after": "10" });
+  const retryAfter = await overLimit(env, "api", request.headers.get("cf-connecting-ip") || "unknown", API_LIMITS);
+  if (retryAfter !== null) return json(429, { error: "rate_limited" }, { "retry-after": retryAfter });
 
   const doFetch = deps.fetch ?? globalThis.fetch;
   const isPost = method === "POST";
