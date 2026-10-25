@@ -30,6 +30,9 @@ resource "cloudflare_workers_script" "site" {
   # off ON PURPOSE. They store per-request metadata at Cloudflare (request, response, client details), which would
   # contradict the privacy policy: the IP address and headers are never recorded by the service. Never enable them
   # from the dashboard: the next apply reverts it.
+  # Every value the API returns is written out, `destinations = []` and the traces' sampling rate included: refresh
+  # copies each non-null value the settings endpoint returns over the state (provider 5.28.1, workers_script/
+  # resource.go, Read), so one left unset here would show as a change in every plan and redeploy the Worker.
   observability = {
     enabled            = true
     head_sampling_rate = 1
@@ -38,9 +41,13 @@ resource "cloudflare_workers_script" "site" {
       invocation_logs    = false
       head_sampling_rate = 1
       persist            = true
+      destinations       = []
     }
     traces = {
-      enabled = false
+      enabled            = false
+      head_sampling_rate = 1
+      persist            = true
+      destinations       = []
     }
   }
 
@@ -98,6 +105,9 @@ resource "cloudflare_workers_script" "ingest" {
   # off ON PURPOSE. They store per-request metadata at Cloudflare (request, response, client details), which would
   # contradict the privacy policy: the IP address and headers are never recorded by the service. Never enable them
   # from the dashboard: the next apply reverts it.
+  # Every value the API returns is written out, `destinations = []` and the traces' sampling rate included: refresh
+  # copies each non-null value the settings endpoint returns over the state (provider 5.28.1, workers_script/
+  # resource.go, Read), so one left unset here would show as a change in every plan and redeploy the Worker.
   observability = {
     enabled            = true
     head_sampling_rate = 1
@@ -106,9 +116,13 @@ resource "cloudflare_workers_script" "ingest" {
       invocation_logs    = false
       head_sampling_rate = 1
       persist            = true
+      destinations       = []
     }
     traces = {
-      enabled = false
+      enabled            = false
+      head_sampling_rate = 1
+      persist            = true
+      destinations       = []
     }
   }
 
