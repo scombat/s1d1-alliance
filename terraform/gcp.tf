@@ -243,9 +243,11 @@ resource "google_cloud_run_v2_service" "anonymizer" {
       image = var.anonymizer_image
 
       resources {
+        # Measured at the first real run (2026-10-25): the two GLiNER models in fp32 plus torch peak at 4.1 to 4.6 GiB,
+        # so 4 GiB was killed (signal 9) and retried. Cloud Run requires at least 2 vCPU above 4 GiB.
         limits = {
-          cpu    = "1"
-          memory = "4Gi"
+          cpu    = "2"
+          memory = "8Gi"
         }
         cpu_idle          = true # CPU only while a request runs
         startup_cpu_boost = true # the models load on the first event
