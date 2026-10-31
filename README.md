@@ -16,7 +16,7 @@ the judges' own agreement and the two classifiers LiteLLM documents (its built-i
 serves the `small` int8 variant. To try the model without sending anything anywhere, the
 [in-browser demo](https://huggingface.co/spaces/scombat/s1d1-router-demo) runs it in your browser.
 
-<p align="center"><img src="assets/bench-qwk-bars.svg" alt="QWK against the judges' median for every candidate and witness, with 95 % bootstrap whiskers: s1d1 full int8 0.807, small 0.772, compact 0.759, tiny 0.614; prompt length 0.543; Laya 0.405 and 0.119; LiteLLM heuristic 0.089; RouteLLM bert 0.278; a Gemma 4 E4B reading the rubric 0.789; the judges' ceiling around 0.77" width="100%"></p>
+<p align="center"><img src="assets/bench-qwk-bars.svg" alt="QWK against the judges' median for every candidate and witness, with 95 % bootstrap whiskers: s1d1 full int8 0.807, small 0.772, compact 0.759, tiny 0.614; prompt length 0.543; Laya 0.405 and 0.119; LiteLLM heuristic 0.089; RouteLLM bert 0.278; a Gemma 4 E4B reading the rubric 0.789; NVIDIA's prompt classifier 0.311 on English only; the judges' ceiling around 0.77" width="100%"></p>
 
 ## The data path
 
