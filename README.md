@@ -10,6 +10,14 @@ Nothing runs there that is not in this repository, and nothing in this repositor
 
 **Licence:** Apache-2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)); the legal pages of the site are not covered. See [Licences of the s1d1 projects](#licences-of-the-s1d1-projects).
 
+**How well the model routes:** [s1d1-bench](https://github.com/scombat/s1d1-bench), an open, replayable bench, scores
+the model against the median of three local LLM judges on 360 prompts in four languages, next to a prompt-length witness,
+the judges' own agreement and the two classifiers LiteLLM documents (its built-in heuristic and Laya). The instance
+serves the `small` int8 variant. To try the model without sending anything anywhere, the
+[in-browser demo](https://huggingface.co/spaces/scombat/s1d1-router-demo) runs it in your browser.
+
+<p align="center"><img src="assets/bench-qwk-bars.svg" alt="QWK against the judges' median for every candidate and witness, with 95 % bootstrap whiskers: s1d1 full int8 0.807, small 0.772, compact 0.759, tiny 0.614; prompt length 0.543; Laya 0.405 and 0.119; LiteLLM heuristic 0.089; the judges' ceiling around 0.77" width="100%"></p>
+
 ## The data path
 
 ```
